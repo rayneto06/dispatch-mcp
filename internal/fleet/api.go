@@ -85,6 +85,16 @@ func (f *Fleet) api(h apiHandler, isQuote bool) http.HandlerFunc {
 				return
 			}
 		}
+
+		switch roll := f.cfg.Rand(); {
+		case roll < p.profile.Rate429:
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusTooManyRequests, "rate limited")
+			return
+		case roll < p.profile.Rate429+p.profile.Rate503:
+			writeError(w, http.StatusServiceUnavailable, "temporarily unavailable")
+			return
+		}
 		h(w, r, p)
 	}
 }
@@ -147,6 +157,13 @@ func (f *Fleet) create(w http.ResponseWriter, r *http.Request, p *partnerState) 
 	f.mu.Unlock()
 
 	go f.advance(p.profile.Name, resp.ID)
+
+	// The booking is made, but the caller never hears so. Only a retry with
+	// the same Idempotency-Key can recover it without booking twice.
+	if f.cfg.Rand() < p.profile.CommitThenFail {
+		writeError(w, http.StatusServiceUnavailable, "temporarily unavailable")
+		return
+	}
 	writeJSON(w, http.StatusCreated, resp)
 }
 

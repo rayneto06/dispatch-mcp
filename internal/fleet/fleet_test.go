@@ -257,3 +257,87 @@ func TestShutdownStopsProgression(t *testing.T) {
 		t.Errorf("create after shutdown = %d, want 503", resp.StatusCode)
 	}
 }
+
+func (h *harness) deliveryCount(name string) int {
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	return len(h.fleet.partners[name].deliveries)
+}
+
+func TestFaults(t *testing.T) {
+	key := map[string]string{"Idempotency-Key": "q_1"}
+
+	t.Run("429 with Retry-After, nothing stored", func(t *testing.T) {
+		h := newHarness(t, Profile{Name: "alpha", BaseCents: 699, Rate429: 1})
+		resp, _ := h.do(t, "POST", "/alpha/v1/deliveries", testKey, sampleCreate(2199), key)
+		if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "1" {
+			t.Errorf("status = %d Retry-After = %q, want 429 and 1", resp.StatusCode, resp.Header.Get("Retry-After"))
+		}
+		if n := h.deliveryCount("alpha"); n != 0 {
+			t.Errorf("%d deliveries stored, want 0", n)
+		}
+	})
+
+	t.Run("503, nothing stored", func(t *testing.T) {
+		h := newHarness(t, Profile{Name: "alpha", BaseCents: 699, Rate503: 1})
+		if resp, _ := h.do(t, "POST", "/alpha/v1/quotes", testKey, sampleQuote, nil); resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("quote status = %d, want 503", resp.StatusCode)
+		}
+		if resp, _ := h.do(t, "POST", "/alpha/v1/deliveries", testKey, sampleCreate(2199), key); resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("create status = %d, want 503", resp.StatusCode)
+		}
+		if n := h.deliveryCount("alpha"); n != 0 {
+			t.Errorf("%d deliveries stored, want 0", n)
+		}
+	})
+
+	t.Run("commit then fail, retry replays", func(t *testing.T) {
+		h := newHarness(t, Profile{Name: "alpha", BaseCents: 699, CommitThenFail: 1})
+		if resp, _ := h.do(t, "POST", "/alpha/v1/deliveries", testKey, sampleCreate(2199), key); resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("first create = %d, want 503 after committing", resp.StatusCode)
+		}
+		resp, body := h.do(t, "POST", "/alpha/v1/deliveries", testKey, sampleCreate(2199), key)
+		var d deliveryResponse
+		json.Unmarshal(body, &d)
+		if resp.StatusCode != http.StatusCreated || d.ID == "" || resp.Header.Get("Idempotent-Replayed") != "true" {
+			t.Errorf("retry = %d %+v, want 201 replay of the stored delivery", resp.StatusCode, d)
+		}
+		if n := h.deliveryCount("alpha"); n != 1 {
+			t.Errorf("%d deliveries stored, want exactly 1", n)
+		}
+	})
+}
+
+func TestDuplicateEvents(t *testing.T) {
+	h := newHarness(t, Profile{Name: "alpha", BaseCents: 699, DuplicateRate: 1})
+	h.do(t, "POST", "/alpha/v1/deliveries", testKey, sampleCreate(2199), map[string]string{"Idempotency-Key": "q_1"})
+
+	if !waitFor(t, 2*time.Second, func() bool { return len(h.recv.snapshot()) >= 6 }) {
+		t.Fatalf("got %d events, want 6 (3 statuses, each sent twice)", len(h.recv.snapshot()))
+	}
+	time.Sleep(50 * time.Millisecond) // no seventh should follow
+	counts := map[string]int{}
+	for _, ev := range h.recv.snapshot() {
+		counts[ev.ID]++
+	}
+	if len(counts) != 3 {
+		t.Errorf("%d distinct event IDs, want 3", len(counts))
+	}
+	for id, n := range counts {
+		if n != 2 {
+			t.Errorf("event %s delivered %d times, want 2", id, n)
+		}
+	}
+}
+
+func TestDefaultProfilesFaults(t *testing.T) {
+	for _, p := range DefaultProfiles() {
+		flaky := p.Rate429 > 0 || p.Rate503 > 0 || p.CommitThenFail > 0
+		if (p.Name == "gamma") != flaky {
+			t.Errorf("%s: flaky = %v; only gamma should inject faults", p.Name, flaky)
+		}
+		if p.DuplicateRate <= 0 {
+			t.Errorf("%s: DuplicateRate = %v, want > 0 so dedup is visible", p.Name, p.DuplicateRate)
+		}
+	}
+}
