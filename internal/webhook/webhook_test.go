@@ -115,7 +115,7 @@ func TestWebhookUnknownDelivery(t *testing.T) {
 	if code := f.post("/webhooks/alpha", eventJSON("evt_7", "alpha", "alpha_999", "assigned", 2), t0, true); code != 200 {
 		t.Errorf("status = %d, want 200 so the partner stops retrying", code)
 	}
-	if n := f.reg.Partner("alpha").UnknownDropped.Load(); n != 1 {
-		t.Errorf("unknown_delivery_dropped = %d, want 1", n)
+	if n := f.reg.Partner("alpha").UnknownDelivery.Load(); n != 1 {
+		t.Errorf("unknown_delivery_events = %d, want 1", n)
 	}
 }

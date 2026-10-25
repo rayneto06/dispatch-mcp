@@ -1,7 +1,9 @@
 package dispatch
 
 import (
+	"cmp"
 	"encoding/base64"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,10 +17,13 @@ type Limits struct {
 	MaxQuotes     int
 	MaxSeenEvents int
 	SeenEventTTL  time.Duration
+	MaxParked     int           // deliveries with updates waiting for their booking
+	ParkedTTL     time.Duration // how long such updates are kept
 }
 
 func DefaultLimits() Limits {
-	return Limits{MaxDeliveries: 500, MaxQuotes: 2000, MaxSeenEvents: 10000, SeenEventTTL: 24 * time.Hour}
+	return Limits{MaxDeliveries: 500, MaxQuotes: 2000, MaxSeenEvents: 10000, SeenEventTTL: 24 * time.Hour,
+		MaxParked: 1000, ParkedTTL: 10 * time.Minute}
 }
 
 // Store keeps all state in memory behind one RWMutex. Every read returns a
@@ -33,6 +38,14 @@ type Store struct {
 	byPartner  map[partnerRef]string // partner's delivery → our delivery ID
 	order      []sortKey             // ascending (CreatedAt, ID), for cursor pagination
 	seen       map[string]time.Time  // webhook event ID → first seen
+	parked     map[partnerRef][]parkedUpdate
+}
+
+// parkedUpdate is a status that arrived before we knew the delivery: the
+// partner's webhook beat its own booking response to us.
+type parkedUpdate struct {
+	u  StatusUpdate
+	at time.Time
 }
 
 type partnerRef struct{ partner, id string }
@@ -57,6 +70,7 @@ func NewStore(l Limits) *Store {
 		byQuote:    map[string]string{},
 		byPartner:  map[partnerRef]string{},
 		seen:       map[string]time.Time{},
+		parked:     map[partnerRef][]parkedUpdate{},
 	}
 }
 
@@ -104,9 +118,13 @@ func (s *Store) AddDelivery(d Delivery) (Delivery, bool, error) {
 		return Delivery{}, false, ErrCapacity
 	}
 	stored := d.clone()
+	ref := partnerRef{d.Partner, d.PartnerDeliveryID}
 	s.deliveries[d.ID] = &stored
 	s.byQuote[d.QuoteID] = d.ID
-	s.byPartner[partnerRef{d.Partner, d.PartnerDeliveryID}] = d.ID
+	s.byPartner[ref] = d.ID
+	for _, u := range s.takeParked(ref, d.CreatedAt) {
+		stored.apply(u, d.CreatedAt)
+	}
 
 	k := sortKey{d.CreatedAt, d.ID}
 	i := sort.Search(len(s.order), func(i int) bool { return !s.order[i].less(k) })
@@ -193,15 +211,22 @@ func decodeCursor(c string) (sortKey, error) {
 
 // ApplyStatus applies a partner's update if it is newer than what we hold.
 // Webhooks can arrive late, twice or out of order; the partner's sequence
-// number, not arrival order, decides.
+// number, not arrival order, decides. An update for a delivery we don't know
+// yet is parked: its booking response may still be on the way.
 func (s *Store) ApplyStatus(u StatusUpdate, now time.Time) ApplyResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	id, ok := s.byPartner[partnerRef{u.Partner, u.PartnerDeliveryID}]
+	ref := partnerRef{u.Partner, u.PartnerDeliveryID}
+	id, ok := s.byPartner[ref]
 	if !ok {
+		s.park(ref, u, now)
 		return Unknown
 	}
-	d := s.deliveries[id]
+	return s.deliveries[id].apply(u, now)
+}
+
+// apply must be called with the store's lock held.
+func (d *Delivery) apply(u StatusUpdate, now time.Time) ApplyResult {
 	d.SyncedAt = now
 	if u.Sequence <= d.Sequence {
 		return Stale
@@ -212,6 +237,37 @@ func (s *Store) ApplyStatus(u StatusUpdate, now time.Time) ApplyResult {
 	d.LastUpdateSource = u.Source
 	d.History = append(d.History, HistoryEntry{Status: u.Status, At: u.At, Source: u.Source})
 	return Applied
+}
+
+func (s *Store) park(ref partnerRef, u StatusUpdate, now time.Time) {
+	if _, ok := s.parked[ref]; !ok && len(s.parked) >= s.limits.MaxParked {
+		for k, ups := range s.parked {
+			if now.Sub(ups[0].at) >= s.limits.ParkedTTL {
+				delete(s.parked, k)
+			}
+		}
+		if len(s.parked) >= s.limits.MaxParked {
+			return // still full: drop it; polling reconciles later
+		}
+	}
+	if len(s.parked[ref]) < 8 { // a delivery has only a handful of statuses
+		s.parked[ref] = append(s.parked[ref], parkedUpdate{u, now})
+	}
+}
+
+// takeParked removes and returns the fresh parked updates for ref, oldest
+// sequence first.
+func (s *Store) takeParked(ref partnerRef, now time.Time) []StatusUpdate {
+	ups := s.parked[ref]
+	delete(s.parked, ref)
+	var out []StatusUpdate
+	for _, p := range ups {
+		if now.Sub(p.at) < s.limits.ParkedTTL {
+			out = append(out, p.u)
+		}
+	}
+	slices.SortFunc(out, func(a, b StatusUpdate) int { return cmp.Compare(a.Sequence, b.Sequence) })
+	return out
 }
 
 // MarkEvent records a webhook event ID and reports whether it was already

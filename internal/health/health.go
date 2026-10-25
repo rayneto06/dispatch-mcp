@@ -25,7 +25,7 @@ type Counters struct {
 	WebhooksReceived  atomic.Int64
 	DuplicatesDropped atomic.Int64
 	OutOfOrderDropped atomic.Int64
-	UnknownDropped    atomic.Int64
+	UnknownDelivery   atomic.Int64
 	BadSignatures     atomic.Int64
 
 	mu        sync.Mutex
@@ -90,7 +90,7 @@ type PartnerSnapshot struct {
 	WebhooksReceived  int64      `json:"webhooks_received"`
 	DuplicatesDropped int64      `json:"duplicates_dropped" jsonschema:"webhooks ignored because the event ID was already processed"`
 	OutOfOrderDropped int64      `json:"out_of_order_dropped" jsonschema:"webhooks ignored because a newer status was already applied"`
-	UnknownDropped    int64      `json:"unknown_delivery_dropped"`
+	UnknownDelivery   int64      `json:"unknown_delivery_events" jsonschema:"webhooks for a delivery not known yet; held for a few minutes in case its booking response is still on the way"`
 	BadSignatures     int64      `json:"bad_signatures"`
 	LastError         string     `json:"last_error,omitempty"`
 	LastErrorAt       *time.Time `json:"last_error_at,omitempty"`
@@ -128,7 +128,7 @@ func (r *Registry) Snapshot() Snapshot {
 			WebhooksReceived:  c.WebhooksReceived.Load(),
 			DuplicatesDropped: c.DuplicatesDropped.Load(),
 			OutOfOrderDropped: c.OutOfOrderDropped.Load(),
-			UnknownDropped:    c.UnknownDropped.Load(),
+			UnknownDelivery:   c.UnknownDelivery.Load(),
 			BadSignatures:     c.BadSignatures.Load(),
 		}
 		c.mu.Lock()

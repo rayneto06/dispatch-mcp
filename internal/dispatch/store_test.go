@@ -222,3 +222,58 @@ func TestDeliveryByQuote(t *testing.T) {
 		t.Error("DeliveryByQuote(q_2) found a delivery")
 	}
 }
+
+func TestEarlyUpdatesAppliedWhenDeliveryArrives(t *testing.T) {
+	s := NewStore(DefaultLimits())
+	early := func(status Status, seq int64) StatusUpdate {
+		return StatusUpdate{Partner: "alpha", PartnerDeliveryID: "alpha_1", Status: status, Sequence: seq,
+			At: t0.Add(time.Duration(seq) * time.Second), Source: SourceWebhook}
+	}
+	// The webhooks beat the booking response (e.g. the partner committed,
+	// answered 503, and our retry came back later).
+	if r := s.ApplyStatus(early(StatusPickedUp, 3), t0); r != Unknown {
+		t.Fatalf("ApplyStatus = %v, want Unknown", r)
+	}
+	s.ApplyStatus(early(StatusAssigned, 2), t0)
+
+	d, _, err := s.AddDelivery(newDelivery(1, t0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Status != StatusPickedUp || d.Sequence != 3 || d.LastUpdateSource != SourceWebhook {
+		t.Errorf("delivery = %s seq %d via %s, want picked_up seq 3 via webhook", d.Status, d.Sequence, d.LastUpdateSource)
+	}
+	var got []string
+	for _, h := range d.History {
+		got = append(got, string(h.Status))
+	}
+	if fmt.Sprint(got) != "[pending assigned picked_up]" {
+		t.Errorf("history = %v, want parked updates applied in sequence order", got)
+	}
+	if again, _ := s.Delivery("d_1"); again.Status != StatusPickedUp {
+		t.Errorf("stored status = %s", again.Status)
+	}
+}
+
+func TestEarlyUpdatesExpireAndStayBounded(t *testing.T) {
+	s := NewStore(Limits{MaxDeliveries: 10, MaxQuotes: 10, MaxSeenEvents: 10, SeenEventTTL: time.Hour, MaxParked: 2, ParkedTTL: time.Minute})
+	park := func(id string, at time.Time) {
+		s.ApplyStatus(StatusUpdate{Partner: "alpha", PartnerDeliveryID: id, Status: StatusAssigned, Sequence: 2, At: at}, at)
+	}
+	park("alpha_1", t0)
+	park("alpha_2", t0)
+	park("alpha_3", t0) // over the cap: dropped, never applied
+	s.mu.RLock()
+	n := len(s.parked)
+	s.mu.RUnlock()
+	if n > 2 {
+		t.Errorf("%d parked deliveries, cap is 2", n)
+	}
+
+	// An update parked longer than ParkedTTL is not applied.
+	d := newDelivery(1, t0.Add(2*time.Minute))
+	got, _, _ := s.AddDelivery(d)
+	if got.Status != StatusPending {
+		t.Errorf("stale parked update applied: status %s", got.Status)
+	}
+}
