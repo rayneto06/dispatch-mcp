@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rayneto06/dispatch-mcp/internal/fleet"
 	"github.com/rayneto06/dispatch-mcp/internal/httpx"
 	"github.com/rayneto06/dispatch-mcp/internal/obs"
 )
@@ -76,11 +76,27 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}
 	logger := obs.NewLogger(stderr, cfg.LogLevel)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, "ok\n")
-	})
+	t := fleet.DefaultTimings()
+	scale := func(d time.Duration) time.Duration { return time.Duration(float64(d) * cfg.TimeScale) }
+	f := fleet.New(fleet.Config{
+		APIKey:        cfg.APIKey,
+		WebhookSecret: []byte(cfg.WebhookSecret),
+		WebhookURL:    cfg.WebhookURL,
+		Timings:       fleet.Timings{Assigned: scale(t.Assigned), PickedUp: scale(t.PickedUp), Delivered: scale(t.Delivered)},
+		Jitter:        0.2,
+		Logger:        logger,
+	}, fleet.DefaultProfiles())
+	f.Start()
 
 	logger.Info("starting", "addr", cfg.Addr, "webhook_url", cfg.WebhookURL)
-	return httpx.Run(ctx, httpx.NewServer(cfg.Addr, mux), 8*time.Second)
+	err = httpx.Run(ctx, httpx.NewServer(cfg.Addr, f.Handler()), 8*time.Second)
+
+	// The HTTP server has stopped; give queued webhooks the rest of the
+	// shutdown window (Cloud Run allows about 10 s after SIGTERM).
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if serr := f.Shutdown(shutdownCtx); serr != nil {
+		logger.Warn("webhooks left undelivered at shutdown", "error", serr)
+	}
+	return err
 }
