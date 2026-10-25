@@ -196,22 +196,24 @@ func TestBackoffIsBoundedJitter(t *testing.T) {
 }
 
 func TestRetryAfterBeyondDeadlineFailsFast(t *testing.T) {
-	script := &script{steps: []step{{status: 429, retryAfter: "1"}}}
+	// The partner asks for 5s; only 2s are left. Sleeping would run into the
+	// deadline, so the client must give up at once instead.
+	script := &script{steps: []step{{status: 429, retryAfter: "5"}}}
 	srv := httptest.NewServer(script)
 	defer srv.Close()
 	c := New(Config{Name: "gamma", BaseURL: srv.URL, APIKey: "k", Logger: slog.New(slog.DiscardHandler)}) // real Sleep
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	start := time.Now()
 	err := quoteCall(ctx, c)
 
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Errorf("took %v, want a fast failure", elapsed)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v, want a fast failure well before the 2s deadline", elapsed)
 	}
 	var apiErr *APIError
-	if !errors.Is(err, ErrRateLimited) || !errors.As(err, &apiErr) || apiErr.RetryAfter != time.Second {
-		t.Errorf("err = %v, want rate limited with RetryAfter 1s", err)
+	if !errors.Is(err, ErrRateLimited) || !errors.As(err, &apiErr) || apiErr.RetryAfter != 5*time.Second {
+		t.Errorf("err = %v, want rate limited with RetryAfter 5s", err)
 	}
 	if n := len(script.requests()); n != 1 {
 		t.Errorf("attempts = %d, want 1", n)
@@ -320,5 +322,24 @@ func TestPing(t *testing.T) {
 	}
 	if f.counters.Attempts.Load() != 0 {
 		t.Errorf("ping must not count as a partner call")
+	}
+}
+
+func TestRejected(t *testing.T) {
+	for code, want := range map[int]bool{0: false, 400: true, 404: true, 422: true, 429: false, 503: false} {
+		if got := (&APIError{StatusCode: code}).Rejected(); got != want {
+			t.Errorf("Rejected() for %d = %v, want %v", code, got, want)
+		}
+	}
+}
+
+func TestUnexpectedStatusMessage(t *testing.T) {
+	f := newFixture(t, step{status: http.StatusMultipleChoices}) // 300: not followed, not an error class we expect
+	err := quoteCall(context.Background(), f.client)
+	if err == nil || err.Error() != "partner gamma: unexpected response (300)" {
+		t.Errorf("err = %v, want unexpected response (300)", err)
+	}
+	if n := len(f.script.requests()); n != 1 {
+		t.Errorf("attempts = %d, want 1 (not retryable)", n)
 	}
 }

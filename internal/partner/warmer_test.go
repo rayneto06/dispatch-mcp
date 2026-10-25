@@ -9,6 +9,23 @@ import (
 	"time"
 )
 
+// waitIdle blocks until no ping is in flight, so the next Kick is decided
+// synchronously and the test needs no sleeps.
+func waitIdle(t *testing.T, w *Warmer) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		w.mu.Lock()
+		busy := w.inflight
+		w.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("ping still in flight after 2s")
+}
+
 func TestWarmerPingsOncePerIdleWindow(t *testing.T) {
 	var calls atomic.Int32
 	pinged := make(chan struct{}, 10)
@@ -30,14 +47,14 @@ func TestWarmerPingsOncePerIdleWindow(t *testing.T) {
 	}
 	wg.Wait()
 	<-pinged
-	time.Sleep(20 * time.Millisecond)
+	waitIdle(t, w)
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("pings after 10 concurrent kicks = %d, want 1", n)
 	}
 
 	advance(time.Minute)
-	w.Kick()
-	time.Sleep(20 * time.Millisecond)
+	w.Kick() // within the idle window: returns without starting a ping
+	waitIdle(t, w)
 	if n := calls.Load(); n != 1 {
 		t.Errorf("pings within the idle window = %d, want 1", n)
 	}
@@ -62,7 +79,7 @@ func TestWarmerRetriesAfterFailedPing(t *testing.T) {
 
 	w.Kick()
 	<-pinged
-	time.Sleep(20 * time.Millisecond)
+	waitIdle(t, w)
 	w.Kick() // the first ping failed, so the partner may still be asleep
 	select {
 	case <-pinged:

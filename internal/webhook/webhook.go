@@ -68,8 +68,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var ev event
-	if err := json.Unmarshal(body, &ev); err != nil || ev.ID == "" || ev.PartnerDeliveryID == "" || ev.Status == "" || ev.Sequence <= 0 {
+	if err := json.Unmarshal(body, &ev); err != nil || ev.ID == "" || ev.PartnerDeliveryID == "" || ev.Sequence <= 0 {
 		http.Error(w, "invalid event", http.StatusBadRequest)
+		return
+	}
+	status, ok := dispatch.ParseStatus(ev.Status)
+	if !ok {
+		http.Error(w, "unknown status", http.StatusBadRequest)
 		return
 	}
 	if ev.Partner != name {
@@ -87,7 +92,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch h.Store.ApplyStatus(dispatch.StatusUpdate{
 			Partner:           name,
 			PartnerDeliveryID: ev.PartnerDeliveryID,
-			Status:            dispatch.Status(ev.Status),
+			Status:            status,
 			Sequence:          ev.Sequence,
 			At:                ev.OccurredAt,
 			Source:            dispatch.SourceWebhook,

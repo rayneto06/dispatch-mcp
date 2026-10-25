@@ -43,6 +43,8 @@ func (e *APIError) Error() string {
 		return p + "not found (404)"
 	case e.StatusCode >= 400:
 		return fmt.Sprintf("%srejected (%d): %s", p, e.StatusCode, e.Body)
+	case e.StatusCode != 0:
+		return fmt.Sprintf("%sunexpected response (%d)", p, e.StatusCode)
 	case errors.Is(e.Err, context.Canceled):
 		return p + "request cancelled"
 	case isTimeout(e.Err):
@@ -53,6 +55,12 @@ func (e *APIError) Error() string {
 }
 
 func (e *APIError) Unwrap() error { return e.Err }
+
+// Rejected reports a definite "no" from the partner: a 4xx other than 429.
+// Nothing was done, and repeating the same request won't change that.
+func (e *APIError) Rejected() bool {
+	return e.StatusCode >= 400 && e.StatusCode < 500 && e.StatusCode != http.StatusTooManyRequests
+}
 
 // Is maps status codes to the sentinels. A timeout is not "unavailable": the
 // partner may have done the work and just been slow to say so.

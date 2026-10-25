@@ -136,7 +136,8 @@ func TestToolErrorsAreAgentReadable(t *testing.T) {
 		{"same point", "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": ferryBuilding}, "pickup and dropoff are the same point"},
 		{"too far", "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": geo.Point{Lat: 37.3382, Lon: -121.8863}}, "more than 50 km apart"},
 		{"bad cursor", "list_deliveries", map[string]any{"cursor": "%%%"}, "invalid cursor; omit it to start from the first page"},
-		{"partner down", "create_delivery", map[string]any{"quote_id": quoted.Quotes[0].ID}, "partner gamma: unavailable (503) after 3 attempts; try again shortly or book another partner's quote"},
+		{"partner down on create", "create_delivery", map[string]any{"quote_id": quoted.Quotes[0].ID},
+			"partner gamma: unavailable (503) after 3 attempts; the booking may still have gone through, so call create_delivery again with the same quote_id before booking another quote"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

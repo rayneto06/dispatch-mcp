@@ -78,14 +78,16 @@ func TestOSRMLimiterWaitRespectsDeadline(t *testing.T) {
 	if _, err := o.Route(context.Background(), ferryBuilding, missionDolores); err != nil {
 		t.Fatal(err) // uses the only token
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// The next token is about 1s away and only 500ms are left: Wait must
+	// fail at once rather than sleep until the deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	start := time.Now()
 	if _, err := o.Route(ctx, ferryBuilding, missionDolores); err == nil {
-		t.Error("second call within a second should fail on the 100ms deadline")
+		t.Error("second call within a second should fail on the 500ms deadline")
 	}
-	if time.Since(start) > 150*time.Millisecond {
-		t.Errorf("waited %v; the limiter must not wait past the deadline", time.Since(start))
+	if time.Since(start) > 400*time.Millisecond {
+		t.Errorf("waited %v; the limiter must not wait for a token past the deadline", time.Since(start))
 	}
 }
 

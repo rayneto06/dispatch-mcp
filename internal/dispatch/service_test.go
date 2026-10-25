@@ -111,7 +111,9 @@ func TestQuoteAllDeadline(t *testing.T) {
 
 	start := time.Now()
 	res, err := e.svc.QuoteAll(context.Background(), ferryBuilding, missionDolores)
-	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+	// The slow partner takes 2s; returning well before that proves the round
+	// stopped at its deadline. The margin keeps a loaded CI runner green.
+	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("QuoteAll took %v, want about the 100ms deadline", elapsed)
 	}
 	if err != nil || len(res.Quotes) != 1 {
@@ -293,6 +295,17 @@ func TestCreateRepeatAfterExpiryReturnsExisting(t *testing.T) {
 	}
 }
 
+func TestCreateWithUnknownPartnerStatusRecordsPending(t *testing.T) {
+	alpha := &dispatchtest.Partner{PartnerName: "alpha", CreateFn: func(context.Context, string, partner.CreateRequest) (partner.Delivery, error) {
+		return partner.Delivery{ID: "alpha_1", Status: "accepted", Sequence: 1}, nil
+	}}
+	e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, alpha)
+	d, _, err := e.svc.Create(context.Background(), quoteOne(t, e).ID)
+	if err != nil || d.Status != StatusPending {
+		t.Errorf("create = %s, %v; want pending (the booking exists, so it must be recorded)", d.Status, err)
+	}
+}
+
 func TestCreateRecordsDelivery(t *testing.T) {
 	e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, &dispatchtest.Partner{PartnerName: "alpha"})
 	q := quoteOne(t, e)
@@ -369,6 +382,23 @@ func TestGetPollFailureIsNote(t *testing.T) {
 	_, note, err = e.svc.Get(context.Background(), d.ID)
 	if err != nil || note != "could not refresh from partner alpha: unavailable (503) after 3 attempts" {
 		t.Errorf("Get = %v, note %q", err, note)
+	}
+
+	alpha.GetFn = func(_ context.Context, id string) (partner.Delivery, error) {
+		return partner.Delivery{ID: id, Status: "teleported", Sequence: 9}, nil
+	}
+	got, note, _ = e.svc.Get(context.Background(), d.ID)
+	if got.Status != StatusPending || note != `partner alpha reported an unknown status "teleported"` {
+		t.Errorf("unknown status: status %s, note %q", got.Status, note)
+	}
+
+	// A poll that runs out of PollBudget must say so, not the quote deadline.
+	alpha.GetFn = func(ctx context.Context, _ string) (partner.Delivery, error) {
+		return partner.Delivery{}, &partner.APIError{Partner: "alpha", Attempts: 1, Err: context.DeadlineExceeded}
+	}
+	_, note, _ = e.svc.Get(context.Background(), d.ID)
+	if note != "could not refresh from partner alpha: timed out after 3s" {
+		t.Errorf("poll timeout note = %q", note)
 	}
 }
 

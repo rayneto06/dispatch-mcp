@@ -22,6 +22,16 @@ const (
 // Terminal reports whether the status can no longer change.
 func (s Status) Terminal() bool { return s == StatusDelivered }
 
+// ParseStatus accepts only the statuses this service knows. Partner input
+// goes through it, so an unexpected string never lands in the store.
+func ParseStatus(s string) (Status, bool) {
+	switch st := Status(s); st {
+	case StatusPending, StatusAssigned, StatusPickedUp, StatusDelivered:
+		return st, true
+	}
+	return "", false
+}
+
 // Source says how we learned about a status.
 type Source string
 
