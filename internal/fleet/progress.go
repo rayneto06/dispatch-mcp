@@ -44,10 +44,18 @@ func (f *Fleet) advance(partner, id string) {
 		if !ok {
 			return
 		}
-		select {
-		case f.queue <- ev:
-		case <-f.done:
-			return
+		// At-least-once delivery, on purpose: sometimes the same event goes
+		// out twice and the receiver has to notice.
+		sends := 1
+		if f.cfg.Rand() < f.partners[partner].profile.DuplicateRate {
+			sends = 2
+		}
+		for range sends {
+			select {
+			case f.queue <- ev:
+			case <-f.done:
+				return
+			}
 		}
 	}
 }

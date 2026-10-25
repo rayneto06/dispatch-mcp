@@ -26,6 +26,12 @@ type Profile struct {
 	QuoteLatency [2]time.Duration // min, max added to each quote request
 	Latency      [2]time.Duration // min, max added to other API requests
 	PickupETA    [2]time.Duration // min, max quoted time until pickup
+
+	// Failure injection, each a probability in [0, 1].
+	Rate429        float64 // answer 429 with Retry-After: 1, do nothing
+	Rate503        float64 // answer 503, do nothing
+	CommitThenFail float64 // book the delivery, then answer 503 anyway
+	DuplicateRate  float64 // send a webhook event twice
 }
 
 // Timings are offsets from creation at which a delivery changes status.
@@ -39,19 +45,21 @@ func DefaultTimings() Timings {
 }
 
 // DefaultProfiles are the three demo partners: alpha is reliable, beta is
-// slow to quote, gamma is cheap.
+// slow to quote, gamma is cheap but flaky. All of them deliver webhooks at
+// least once, so some events arrive twice.
 func DefaultProfiles() []Profile {
 	ms := time.Millisecond
 	return []Profile{
 		{Name: "alpha", BaseCents: 699, PerKmCents: 150,
 			QuoteLatency: [2]time.Duration{50 * ms, 200 * ms}, Latency: [2]time.Duration{50 * ms, 200 * ms},
-			PickupETA: [2]time.Duration{8 * time.Minute, 15 * time.Minute}},
+			PickupETA: [2]time.Duration{8 * time.Minute, 15 * time.Minute}, DuplicateRate: 0.10},
 		{Name: "beta", BaseCents: 899, PerKmCents: 170,
 			QuoteLatency: [2]time.Duration{800 * ms, 2500 * ms}, Latency: [2]time.Duration{100 * ms, 300 * ms},
-			PickupETA: [2]time.Duration{5 * time.Minute, 10 * time.Minute}},
+			PickupETA: [2]time.Duration{5 * time.Minute, 10 * time.Minute}, DuplicateRate: 0.10},
 		{Name: "gamma", BaseCents: 499, PerKmCents: 120,
 			QuoteLatency: [2]time.Duration{50 * ms, 300 * ms}, Latency: [2]time.Duration{50 * ms, 300 * ms},
-			PickupETA: [2]time.Duration{10 * time.Minute, 20 * time.Minute}},
+			PickupETA: [2]time.Duration{10 * time.Minute, 20 * time.Minute},
+			Rate429:   0.15, Rate503: 0.15, CommitThenFail: 0.10, DuplicateRate: 0.30},
 	}
 }
 

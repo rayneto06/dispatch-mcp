@@ -379,3 +379,45 @@ func TestEndToEnd(t *testing.T) {
 		}
 	}
 }
+
+func TestEndToEndWithFlakyPartner(t *testing.T) {
+	e := newE2E(t, []fleet.Profile{{Name: "gamma", BaseCents: 499, PerKmCents: 120, CommitThenFail: 1, DuplicateRate: 1}})
+
+	var quoted dispatch.QuoteResult
+	e.call(t, "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": missionDolores}, &quoted)
+	// gamma commits the booking, then answers 503; the client retries with
+	// the same Idempotency-Key and gets the stored booking back.
+	var booked created
+	e.call(t, "create_delivery", map[string]any{"quote_id": quoted.Quotes[0].ID}, &booked)
+	if booked.AlreadyBooked || booked.Delivery.PartnerDeliveryID == "" {
+		t.Fatalf("create = %+v", booked)
+	}
+
+	d := e.waitDelivered(t, booked.Delivery.ID)
+	seen := map[dispatch.Status]int{}
+	for _, h := range d.History {
+		seen[h.Status]++
+	}
+	for status, n := range seen {
+		if n != 1 {
+			t.Errorf("status %s appears %d times in history; duplicates must be dropped", status, n)
+		}
+	}
+
+	var snap health.Snapshot
+	e.call(t, "partner_health", map[string]any{}, &snap)
+	g := snap.Partners[0]
+	if g.Retries < 1 || g.ServerErrors < 1 {
+		t.Errorf("gamma retries = %d, 5xx = %d; want the commit-then-fail retry counted", g.Retries, g.ServerErrors)
+	}
+	// Webhooks can still be in flight when the status reads delivered.
+	deadline := time.Now().Add(2 * time.Second)
+	for g.DuplicatesDropped < 3 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		e.call(t, "partner_health", map[string]any{}, &snap)
+		g = snap.Partners[0]
+	}
+	if g.DuplicatesDropped < 3 {
+		t.Errorf("duplicates_dropped = %d, want >= 3", g.DuplicatesDropped)
+	}
+}
