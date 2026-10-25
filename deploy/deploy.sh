@@ -17,8 +17,20 @@ SECRETS=(partner-api-key webhook-secret mcp-token)
 
 gc() { gcloud --project "$PROJECT_ID" --quiet "$@"; }
 
+# IAM is eventually consistent: a service account created a moment ago can be
+# "not found" by the next call. Retry with a growing pause.
+retry() {
+  local i
+  for i in 1 2 3 4 5 6; do
+    "$@" && return 0
+    echo "retrying in $((i * 5))s..." >&2
+    sleep $((i * 5))
+  done
+  return 1
+}
+
 account=$(gcloud config get-value account 2>/dev/null)
-parent=$(gcloud projects describe "$PROJECT_ID" --format='value(parent.type,parent.id)' 2>/dev/null || echo "(new project)")
+parent=$(gcloud projects describe "$PROJECT_ID" --format='value(parent.id)' 2>/dev/null || echo "(new project)")
 echo "account: $account"
 echo "project: $PROJECT_ID  parent: ${parent:-none}  region: $REGION"
 if [[ "${YES:-}" != 1 ]]; then
@@ -56,7 +68,7 @@ if ! gc iam service-accounts describe "$SA" >/dev/null 2>&1; then
   gc iam service-accounts create "$SA_NAME" --display-name="dispatch-mcp runtime"
 fi
 for s in "${SECRETS[@]}"; do
-  gc secrets add-iam-policy-binding "$s" --member="serviceAccount:$SA" \
+  retry gc secrets add-iam-policy-binding "$s" --member="serviceAccount:$SA" \
     --role=roles/secretmanager.secretAccessor >/dev/null
 done
 
