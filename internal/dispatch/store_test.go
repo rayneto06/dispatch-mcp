@@ -211,3 +211,14 @@ func TestStatusTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestDeliveryByQuote(t *testing.T) {
+	s := NewStore(DefaultLimits())
+	s.AddDelivery(newDelivery(1, t0))
+	if d, ok := s.DeliveryByQuote("q_1"); !ok || d.ID != "d_1" {
+		t.Errorf("DeliveryByQuote(q_1) = %s, %v", d.ID, ok)
+	}
+	if _, ok := s.DeliveryByQuote("q_2"); ok {
+		t.Error("DeliveryByQuote(q_2) found a delivery")
+	}
+}

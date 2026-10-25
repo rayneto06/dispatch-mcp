@@ -116,6 +116,17 @@ func (s *Store) AddDelivery(d Delivery) (Delivery, bool, error) {
 	return stored.clone(), false, nil
 }
 
+// DeliveryByQuote returns the delivery booked from a quote, if any.
+func (s *Store) DeliveryByQuote(quoteID string) (Delivery, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.byQuote[quoteID]
+	if !ok {
+		return Delivery{}, false
+	}
+	return s.deliveries[id].clone(), true
+}
+
 func (s *Store) Delivery(id string) (Delivery, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
