@@ -114,7 +114,7 @@ func newApp(cfg config, logger *slog.Logger, httpClient *http.Client) (*app, err
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
 	})
 	if cfg.Transport == "http" {
