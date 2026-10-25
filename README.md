@@ -101,14 +101,26 @@ npx @modelcontextprotocol/inspector -e PARTNER_API_KEY=dev -e WEBHOOK_SECRET=dev
 
 ## Use the hosted demo
 
-The hosted endpoint is a URL with a secret path segment, shared privately:
+The hosted endpoint is one URL with a secret path segment, shared
+privately. It works with any MCP client that supports remote servers over
+Streamable HTTP; there is no OAuth step, because the URL is the credential.
 
-```sh
-claude mcp add --transport http dispatch "<MCP_URL>"
-```
+| Client | How to connect |
+|---|---|
+| Claude Code | `claude mcp add --transport http dispatch "<MCP_URL>"` |
+| Codex (CLI and IDE) | `codex mcp add dispatch --url "<MCP_URL>"`, or in `~/.codex/config.toml`: `[mcp_servers.dispatch]` with `url = "<MCP_URL>"` |
+| Claude Desktop, claude.ai | Settings → Connectors → Add custom connector, paste the URL |
+| Cursor | `~/.cursor/mcp.json`: `{"mcpServers": {"dispatch": {"url": "<MCP_URL>"}}}` |
+| VS Code | `.vscode/mcp.json`: `{"servers": {"dispatch": {"type": "http", "url": "<MCP_URL>"}}}` |
+| MCP Inspector | Transport "Streamable HTTP", paste the URL |
 
-In the MCP Inspector, choose the Streamable HTTP transport and paste the
-same URL.
+Then ask in plain language, for example "quote a delivery from the Ferry
+Building to Mission Dolores in San Francisco and book the fastest one". The
+server's instructions tell the agent the flow. Any city works, as long as
+pickup and dropoff are within 50 km.
+
+Tested end to end with Claude Code, MCP Inspector and the Go SDK client.
+Clients that only speak the older HTTP+SSE transport will not connect.
 
 Both services scale to zero. The first call after a quiet period wakes them
 (a few seconds), and state is in memory, so deliveries disappear after about
