@@ -32,9 +32,10 @@ type Router interface {
 }
 
 var (
-	ErrOutOfArea = errors.New("pickup and dropoff are too far apart")
-	ErrSamePoint = errors.New("pickup and dropoff are the same point")
-	ErrNoQuotes  = errors.New("no partner returned a quote")
+	ErrInvalidLocation = errors.New("invalid location")
+	ErrOutOfArea       = errors.New("pickup and dropoff are too far apart")
+	ErrSamePoint       = errors.New("pickup and dropoff are the same point")
+	ErrNoQuotes        = errors.New("no partner returned a quote")
 )
 
 type Config struct {
@@ -82,10 +83,10 @@ func NewService(cfg Config, store *Store, router Router, partners []Partner, reg
 // are reported, not fatal; only zero quotes is an error.
 func (s *Service) QuoteAll(ctx context.Context, pickup, dropoff geo.Point) (QuoteResult, error) {
 	if err := pickup.Validate(); err != nil {
-		return QuoteResult{}, fmt.Errorf("pickup: %w", err)
+		return QuoteResult{}, fmt.Errorf("%w: pickup: %v", ErrInvalidLocation, err)
 	}
 	if err := dropoff.Validate(); err != nil {
-		return QuoteResult{}, fmt.Errorf("dropoff: %w", err)
+		return QuoteResult{}, fmt.Errorf("%w: dropoff: %v", ErrInvalidLocation, err)
 	}
 	if pickup == dropoff {
 		return QuoteResult{}, ErrSamePoint
