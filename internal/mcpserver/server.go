@@ -15,11 +15,11 @@ import (
 
 // Instructions are sent to the client at initialization; agents read them
 // to learn the flow before calling anything.
-const Instructions = `dispatch-mcp books last-mile deliveries with three simulated fleet partners (alpha, beta, gamma).
+const Instructions = `dispatch-mcp books last-mile deliveries with simulated fleet partners (by default alpha, beta and gamma).
 
 Flow: quote_delivery with pickup and dropoff coordinates (lat/lon; look up addresses yourself) → pick a quote → create_delivery with its quote_id → track with get_delivery or list_deliveries.
 
-Statuses go pending → assigned → picked_up → delivered over about 3 minutes, pushed by partner webhooks.
+Statuses go pending → assigned → picked_up → delivered over two to three minutes, pushed by partner webhooks.
 
 create_delivery is idempotent per quote_id: repeating it never books twice, so retrying after an error is safe.
 

@@ -114,7 +114,7 @@ so deduplication shows up in `partner_health` instead of only in tests.
 **State in memory, one instance, scale to zero.** Both services run with
 `max-instances=1`, which correctness needs (state lives in the process) and
 which also caps cost. With `min-instances=0`, state resets after about 15
-idle minutes; a delivery completes in about 3, so only history is lost. The
+idle minutes; a delivery completes in two to three, so only history is lost. The
 next step would be a snapshot to a Cloud Storage volume on SIGTERM, reloaded
 at start. Production: a database, and webhook ingestion as its own service
 writing to it.
@@ -133,9 +133,9 @@ only works during requests, does not.
 SIGTERM. HTTP servers drain for up to 8 s; the fleet stops its timers and
 gives queued webhooks what is left of Cloud Run's 10 s.
 
-**Health checks on `/health`.** Cloud Run's front end reserves paths ending
-in `z` and answers `/healthz` itself with a 404, so the first deploy's
-health checks never reached the container.
+**Health checks on `/health`.** On the first deploy, `/healthz` got a
+Google-branded 404 that never reached the container (others report the
+same; it is not documented), so both services use `/health`.
 
 **Explicit HTTP server timeouts.** The zero values mean no timeout, which
 lets a slow client hold a connection forever.
@@ -153,8 +153,28 @@ the OSRM limiter, body size caps, `max-instances=1`, and a billing spend cap
 on the project. Per-client limits would need per-client identity; see OAuth
 above.
 
-## Not here
+## Next steps
 
-OpenTelemetry tracing, tool-selection evals, persistence, OAuth, Terraform
-and Kubernetes. Each is a real next step; none was needed to show the
+**Tracing.** The two seams already exist. The MCP receiving middleware
+(`internal/mcpserver/server.go`) wraps every request and measures it: that
+becomes one span per tool call. `partner.Client.attempt`
+(`internal/partner/client.go`) already logs partner, status, attempt and
+duration: that becomes one child span per HTTP attempt, so retries show up
+as siblings. The request ID that travels today in the context and in
+`X-Request-ID` would become a W3C `traceparent`, exported to Cloud Trace.
+Not built here: it adds several OpenTelemetry modules, and for someone using
+the server a span exporter shows little that the request ID doesn't.
+
+**Tool-selection evals.** A JSON file of scenarios (a user request, the tool
+an agent should call, the argument keys it must pass, and cases where no
+tool should be called), run by a test behind an `eval` build tag: start the
+server in-process over in-memory transports, list its tools, send each
+scenario and the tool schemas to a model, and check the first tool call's
+name and arguments. The scenario file is the regression set: a change to a
+tool description that makes the model pick the wrong tool fails the run.
+Task-completion evals would follow, scripted against the fake fleet, whose
+faults make "did the agent recover?" measurable.
+
+**Also not here:** persistence, OAuth, per-partner secrets, Terraform and
+Kubernetes. Each is a real next step; none was needed to show the
 integration patterns working.
