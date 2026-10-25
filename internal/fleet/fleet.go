@@ -182,6 +182,6 @@ func (f *Fleet) between(r [2]time.Duration) time.Duration {
 
 func randomHex(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	rand.Read(b) // crypto/rand.Read never returns an error
 	return hex.EncodeToString(b)
 }

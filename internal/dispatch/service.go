@@ -342,6 +342,6 @@ func ceilMinutes(d time.Duration) int {
 
 func newID(prefix string) string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	rand.Read(b) // crypto/rand.Read never returns an error
 	return prefix + hex.EncodeToString(b)
 }

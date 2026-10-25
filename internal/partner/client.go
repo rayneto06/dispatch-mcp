@@ -268,7 +268,7 @@ func (c *Client) attempt(ctx context.Context, r request, payload []byte, n int) 
 	attrs := []any{"partner", c.cfg.Name, "method", r.method, "path", r.path, "status", status,
 		"attempt", n, "duration_ms", time.Since(start).Milliseconds(), "request_id", obs.RequestID(ctx)}
 	if err != nil {
-		c.cfg.Logger.Warn("partner call", append(attrs, "error", err.Error())...)
+		c.cfg.Logger.Warn("partner call", append(attrs, "error", err)...)
 	} else {
 		c.cfg.Logger.Info("partner call", attrs...)
 	}

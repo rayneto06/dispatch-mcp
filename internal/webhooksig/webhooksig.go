@@ -62,7 +62,7 @@ func Verify(secret []byte, header string, body []byte, now time.Time, tolerance 
 	if !hmac.Equal(got, mac(secret, ts, body)) { // constant-time compare
 		return ErrInvalid
 	}
-	if age := now.Sub(time.Unix(unix, 0)); age > tolerance || age < -tolerance {
+	if now.Sub(time.Unix(unix, 0)).Abs() > tolerance {
 		return ErrExpired
 	}
 	return nil
