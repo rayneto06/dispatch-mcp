@@ -1,0 +1,8 @@
+# Files Cloud Build does not need.
+.git/
+.claude/
+.superpowers/
+docs/superpowers/
+bin/
+GO-NOTES.md
+.env*
