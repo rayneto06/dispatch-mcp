@@ -175,14 +175,14 @@ func TestHTTPModeServesHealthAndMCP(t *testing.T) {
 	srv := httptest.NewServer(a.handler)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/healthz")
+	resp, err := http.Get(srv.URL + "/health")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "ok" {
-		t.Errorf("healthz = %d %q", resp.StatusCode, body)
+		t.Errorf("health = %d %q", resp.StatusCode, body)
 	}
 
 	ping := func(path string) (int, string) {

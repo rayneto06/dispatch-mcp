@@ -104,6 +104,6 @@ gc run deploy dispatch-mcp "${common[@]}" \
 
 TOKEN=$(gc secrets versions access latest --secret=mcp-token)
 echo
-echo "fakefleet health:    $FLEET_URL/healthz"
-echo "dispatch-mcp health: $DISPATCH_URL/healthz"
+echo "fakefleet health:    $FLEET_URL/health"
+echo "dispatch-mcp health: $DISPATCH_URL/health"
 echo "MCP URL (keep private): $DISPATCH_URL/mcp/$TOKEN"

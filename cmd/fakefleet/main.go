@@ -77,7 +77,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	logger := obs.NewLogger(stderr, cfg.LogLevel)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
 	})
 
