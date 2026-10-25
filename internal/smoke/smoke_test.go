@@ -70,7 +70,24 @@ func TestHostedFlow(t *testing.T) {
 
 	booked := call("create_delivery", map[string]any{"quote_id": cheapest})
 	id := booked["delivery"].(map[string]any)["delivery_id"]
-	call("get_delivery", map[string]any{"delivery_id": id})
+
+	// The partner reports "assigned" about 10 s after booking, by webhook
+	// from one Cloud Run service to the other.
+	deadline := time.Now().Add(40 * time.Second)
+	for {
+		got := call("get_delivery", map[string]any{"delivery_id": id})
+		d := got["delivery"].(map[string]any)
+		if d["status"] != "pending" {
+			if d["last_update_source"] != "webhook" {
+				t.Errorf("status %v arrived by %v, want webhook", d["status"], d["last_update_source"])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("still pending after 40s: webhooks are not arriving")
+		}
+		time.Sleep(5 * time.Second)
+	}
 	call("list_deliveries", map[string]any{})
 	call("partner_health", map[string]any{})
 }
