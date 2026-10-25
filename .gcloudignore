@@ -1,0 +1,4 @@
+# Files Cloud Build does not need.
+.git/
+bin/
+.env*
