@@ -27,7 +27,11 @@ func NewLogger(w io.Writer, level slog.Level) *slog.Logger {
 			}
 			switch a.Key {
 			case slog.LevelKey:
-				return slog.String("severity", severity(a.Value.Any().(slog.Level)))
+				// Only the record's own level is a slog.Level; an attribute a
+				// caller named "level" (the MCP SDK logs one) passes through.
+				if l, ok := a.Value.Any().(slog.Level); ok {
+					return slog.String("severity", severity(l))
+				}
 			case slog.MessageKey:
 				a.Key = "message"
 			}
