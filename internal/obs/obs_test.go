@@ -84,3 +84,20 @@ func TestNewRequestID(t *testing.T) {
 		t.Errorf("two request IDs are equal: %q", a)
 	}
 }
+
+// A top-level attribute that happens to be called "level" (the MCP SDK logs
+// one when a client calls logging/setLevel) must not be mistaken for the
+// record's level.
+func TestNewLoggerToleratesLevelAttribute(t *testing.T) {
+	type otherLevel string
+	var buf bytes.Buffer
+	NewLogger(&buf, slog.LevelInfo).Info("set level", "level", otherLevel("debug"))
+
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("log line is not JSON: %v: %q", err, buf.String())
+	}
+	if line["severity"] != "INFO" || line["level"] != "debug" {
+		t.Errorf("line = %v, want severity INFO and the attribute kept as level=debug", line)
+	}
+}

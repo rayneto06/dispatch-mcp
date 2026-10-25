@@ -171,6 +171,38 @@ func TestStdioStdoutIsOnlyJSONRPC(t *testing.T) {
 	}
 }
 
+// An MCP client calling logging/setLevel (MCP Inspector does) must not
+// crash the server. This drives run() so the real logger is in the path.
+func TestStdioSurvivesSetLoggingLevel(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	var stdout, stderr syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(context.Background(), env(with(baseEnv(), "WEBHOOK_ADDR", "127.0.0.1:0")), stdinR, &stdout, &stderr)
+	}()
+
+	for _, line := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"logging/setLevel","params":{"level":"debug"}}`,
+	} {
+		if _, err := io.WriteString(stdinW, line+"\n"); err != nil {
+			t.Fatalf("write stdin: %v", err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(stdout.String(), `"id":2`) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	stdinW.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"id":2,"result"`) {
+		t.Errorf("no result for logging/setLevel; stdout = %q", stdout.String())
+	}
+}
+
 func TestHTTPModeServesHealthAndMCP(t *testing.T) {
 	cfg, err := loadConfig(env(with(baseEnv(), "TRANSPORT", "http", "MCP_TOKEN", testToken)))
 	if err != nil {
