@@ -163,8 +163,8 @@ func TestQuoteAllValidation(t *testing.T) {
 		wantIs           error
 		wantTextContains string
 	}{
-		{"swapped pickup", geo.Point{Lat: -122.4, Lon: 37.7}, missionDolores, nil, "pickup: lat must be"},
-		{"bad dropoff", ferryBuilding, geo.Point{Lat: 0, Lon: 200}, nil, "dropoff: lon must be"},
+		{"swapped pickup", geo.Point{Lat: -122.4, Lon: 37.7}, missionDolores, ErrInvalidLocation, "pickup: lat must be"},
+		{"bad dropoff", ferryBuilding, geo.Point{Lat: 0, Lon: 200}, ErrInvalidLocation, "dropoff: lon must be"},
 		{"same point", ferryBuilding, ferryBuilding, ErrSamePoint, ""},
 		{"60 km apart", ferryBuilding, geo.Point{Lat: 37.3382, Lon: -121.8863}, ErrOutOfArea, ""}, // San Jose
 	}

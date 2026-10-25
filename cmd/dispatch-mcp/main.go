@@ -21,8 +21,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
 
+	"github.com/rayneto06/dispatch-mcp/internal/dispatch"
+	"github.com/rayneto06/dispatch-mcp/internal/health"
 	"github.com/rayneto06/dispatch-mcp/internal/httpx"
+	"github.com/rayneto06/dispatch-mcp/internal/mcpserver"
 	"github.com/rayneto06/dispatch-mcp/internal/obs"
+	"github.com/rayneto06/dispatch-mcp/internal/partner"
+	"github.com/rayneto06/dispatch-mcp/internal/routing"
+	"github.com/rayneto06/dispatch-mcp/internal/webhook"
 )
 
 func main() {
@@ -106,16 +112,50 @@ func loadConfig(getenv func(string) string) (config, error) {
 type app struct {
 	mcp     *mcp.Server
 	handler http.Handler // webhooks and health; plus the MCP endpoint in http mode
+	warmer  *partner.Warmer
 }
 
 func newApp(cfg config, logger *slog.Logger, httpClient *http.Client) (*app, error) {
+	reg := health.NewRegistry(cfg.Partners, time.Now())
+	clients := make([]*partner.Client, len(cfg.Partners))
+	partners := make([]dispatch.Partner, len(cfg.Partners))
+	for i, name := range cfg.Partners {
+		clients[i] = partner.New(partner.Config{
+			Name:       name,
+			BaseURL:    cfg.FleetBaseURL + "/" + name + "/v1",
+			APIKey:     cfg.PartnerAPIKey,
+			HTTPClient: httpClient,
+			Counters:   reg.Partner(name),
+			Logger:     logger,
+		})
+		partners[i] = clients[i]
+	}
+
+	store := dispatch.NewStore(dispatch.DefaultLimits())
+	router := routing.NewOSRM(cfg.OSRMBaseURL, httpClient, rate.NewLimiter(1, 1)) // demo server: 1 req/s
+	dcfg := dispatch.DefaultConfig()
+	dcfg.QuoteDeadline = cfg.QuoteDeadline
+	svc := dispatch.NewService(dcfg, store, router, partners, reg, time.Now)
+
+	// All simulated partners live in one fakefleet process, so pinging one
+	// wakes them all.
+	warmer := partner.NewWarmer(clients[0].Ping, 10*time.Minute, time.Now, logger)
 	a := &app{
-		mcp: mcp.NewServer(&mcp.Implementation{Name: "dispatch-mcp", Version: "0.1.0"}, &mcp.ServerOptions{Logger: logger}),
+		mcp:    mcpserver.New(mcpserver.Deps{Service: svc, Health: reg, Logger: logger, OnRequest: warmer.Kick}),
+		warmer: warmer,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
+	})
+	mux.Handle("POST /webhooks/{partner}", &webhook.Handler{
+		Secret:    []byte(cfg.WebhookSecret),
+		Store:     store,
+		Health:    reg,
+		Now:       time.Now,
+		Tolerance: 5 * time.Minute,
+		Logger:    logger,
 	})
 	if cfg.Transport == "http" {
 		// Stateless: no Mcp-Session-Id, so a Cloud Run restart never strands a
@@ -143,6 +183,7 @@ func run(ctx context.Context, getenv func(string) string, stdin io.Reader, stdou
 		return err
 	}
 	logger.Info("starting", "transport", cfg.Transport, "addr", cfg.Addr, "partners", cfg.Partners)
+	a.warmer.Kick() // a cold start here usually means the partners are cold too
 
 	if cfg.Transport == "http" {
 		return httpx.Run(ctx, httpx.NewServer(cfg.Addr, a.handler), 8*time.Second)
