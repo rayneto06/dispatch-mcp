@@ -65,7 +65,7 @@ func logging(logger *slog.Logger, onRequest func()) mcp.Middleware {
 				}
 			}
 			if err != nil {
-				logger.Warn("mcp request", append(attrs, "error", err.Error())...)
+				logger.Warn("mcp request", append(attrs, "error", err)...)
 			} else {
 				logger.Info("mcp request", attrs...)
 			}

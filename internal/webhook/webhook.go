@@ -62,7 +62,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// reaches the JSON decoder or the store.
 	if err := webhooksig.Verify(h.Secret, r.Header.Get(webhooksig.Header), body, h.Now(), h.Tolerance); err != nil {
 		c.BadSignatures.Add(1)
-		h.Logger.Warn("webhook rejected", "partner", name, "error", err.Error())
+		h.Logger.Warn("webhook rejected", "partner", name, "error", err)
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}

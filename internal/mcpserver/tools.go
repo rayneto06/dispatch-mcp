@@ -172,6 +172,6 @@ func (t *tools) toolError(ctx context.Context, err error) error {
 		return fmt.Errorf("%v; repeating the same call is safe", err)
 	}
 	id := obs.RequestID(ctx)
-	t.logger.Error("tool failed", "request_id", id, "error", err.Error())
+	t.logger.Error("tool failed", "request_id", id, "error", err)
 	return fmt.Errorf("internal error (request %s)", id)
 }

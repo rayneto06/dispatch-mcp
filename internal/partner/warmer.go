@@ -49,7 +49,7 @@ func (w *Warmer) Kick() {
 		w.mu.Unlock()
 
 		if err != nil {
-			w.logger.Warn("partner warm-up failed", "error", err.Error())
+			w.logger.Warn("partner warm-up failed", "error", err)
 			return
 		}
 		w.logger.Info("partner warm-up", "duration_ms", time.Since(start).Milliseconds())

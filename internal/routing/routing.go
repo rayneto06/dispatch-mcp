@@ -32,14 +32,14 @@ type Route struct {
 
 type OSRM struct {
 	baseURL string
-	http    *http.Client
+	client  *http.Client
 	limiter *rate.Limiter
 }
 
 // NewOSRM returns a client for an OSRM server. limiter is shared by every
 // call; the public demo server allows at most one request per second.
 func NewOSRM(baseURL string, httpClient *http.Client, limiter *rate.Limiter) *OSRM {
-	return &OSRM{baseURL: baseURL, http: httpClient, limiter: limiter}
+	return &OSRM{baseURL: baseURL, client: httpClient, limiter: limiter}
 }
 
 // Route asks OSRM for the driving route from one point to another.
@@ -49,14 +49,14 @@ func (o *OSRM) Route(ctx context.Context, from, to geo.Point) (Route, error) {
 		return Route{}, fmt.Errorf("osrm rate limit: %w", err)
 	}
 	// OSRM takes lon,lat, the reverse of how people write coordinates.
-	url := fmt.Sprintf("%s/route/v1/driving/%s,%s;%s,%s?overview=false", o.baseURL, num(from.Lon), num(from.Lat), num(to.Lon), num(to.Lat))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	endpoint := fmt.Sprintf("%s/route/v1/driving/%s,%s;%s,%s?overview=false", o.baseURL, num(from.Lon), num(from.Lat), num(to.Lon), num(to.Lat))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return Route{}, err
 	}
 	req.Header.Set("User-Agent", UserAgent)
 
-	resp, err := o.http.Do(req)
+	resp, err := o.client.Do(req)
 	if err != nil {
 		return Route{}, fmt.Errorf("osrm: %w", err)
 	}

@@ -115,7 +115,7 @@ type app struct {
 	warmer  *partner.Warmer
 }
 
-func newApp(cfg config, logger *slog.Logger, httpClient *http.Client) (*app, error) {
+func newApp(cfg config, logger *slog.Logger, httpClient *http.Client) *app {
 	reg := health.NewRegistry(cfg.Partners, time.Now())
 	clients := make([]*partner.Client, len(cfg.Partners))
 	partners := make([]dispatch.Partner, len(cfg.Partners))
@@ -168,7 +168,7 @@ func newApp(cfg config, logger *slog.Logger, httpClient *http.Client) (*app, err
 		mux.Handle("/mcp/{token}", httpx.RequireToken(cfg.MCPToken, httpx.RateLimit(limiter, mcpHandler)))
 	}
 	a.handler = mux
-	return a, nil
+	return a
 }
 
 func run(ctx context.Context, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -178,10 +178,7 @@ func run(ctx context.Context, getenv func(string) string, stdin io.Reader, stdou
 	}
 	// Logs go to stderr only: in stdio mode stdout is the MCP channel.
 	logger := obs.NewLogger(stderr, cfg.LogLevel)
-	a, err := newApp(cfg, logger, &http.Client{Timeout: 10 * time.Second})
-	if err != nil {
-		return err
-	}
+	a := newApp(cfg, logger, &http.Client{Timeout: 10 * time.Second})
 	logger.Info("starting", "transport", cfg.Transport, "addr", cfg.Addr, "partners", cfg.Partners)
 	a.warmer.Kick() // a cold start here usually means the partners are cold too
 

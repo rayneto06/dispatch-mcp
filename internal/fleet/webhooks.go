@@ -28,11 +28,11 @@ func (f *Fleet) send(ev event) {
 		f.cfg.Logger.Error("marshal webhook", "event_id", ev.ID, "error", err)
 		return
 	}
-	url := f.cfg.WebhookURL + "/webhooks/" + ev.Partner
+	endpoint := f.cfg.WebhookURL + "/webhooks/" + ev.Partner
 	backoff := 500 * time.Millisecond
 
 	for attempt := 1; ; attempt++ {
-		status, err := f.post(url, body)
+		status, err := f.post(endpoint, body)
 		retryable := err != nil || status == http.StatusTooManyRequests || status >= 500
 		if err == nil && status < 300 {
 			return
@@ -51,8 +51,8 @@ func (f *Fleet) send(ev event) {
 	}
 }
 
-func (f *Fleet) post(url string, body []byte) (int, error) {
-	req, err := http.NewRequestWithContext(f.sendCtx, http.MethodPost, url, bytes.NewReader(body))
+func (f *Fleet) post(endpoint string, body []byte) (int, error) {
+	req, err := http.NewRequestWithContext(f.sendCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}

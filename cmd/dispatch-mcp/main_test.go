@@ -176,10 +176,7 @@ func TestHTTPModeServesHealthAndMCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	a, err := newApp(cfg, slog.New(slog.DiscardHandler), http.DefaultClient)
-	if err != nil {
-		t.Fatalf("newApp: %v", err)
-	}
+	a := newApp(cfg, slog.New(slog.DiscardHandler), http.DefaultClient)
 	srv := httptest.NewServer(a.handler)
 	defer srv.Close()
 
@@ -260,10 +257,7 @@ func newE2E(t *testing.T, profiles []fleet.Profile) *e2e {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := newApp(cfg, slog.New(slog.DiscardHandler), &http.Client{Timeout: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := newApp(cfg, slog.New(slog.DiscardHandler), &http.Client{Timeout: 5 * time.Second})
 	h := a.handler
 	handler.Store(&h)
 

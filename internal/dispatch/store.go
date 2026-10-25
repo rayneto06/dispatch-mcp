@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"encoding/base64"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,11 +54,8 @@ type sortKey struct {
 	id      string
 }
 
-func (a sortKey) less(b sortKey) bool {
-	if !a.created.Equal(b.created) {
-		return a.created.Before(b.created)
-	}
-	return a.id < b.id
+func (a sortKey) compare(b sortKey) int {
+	return cmp.Or(a.created.Compare(b.created), cmp.Compare(a.id, b.id))
 }
 
 func NewStore(l Limits) *Store {
@@ -123,14 +119,12 @@ func (s *Store) AddDelivery(d Delivery) (Delivery, bool, error) {
 	s.byQuote[d.QuoteID] = d.ID
 	s.byPartner[ref] = d.ID
 	for _, u := range s.takeParked(ref, d.CreatedAt) {
-		stored.apply(u, d.CreatedAt)
+		applyUpdate(&stored, u, d.CreatedAt)
 	}
 
 	k := sortKey{d.CreatedAt, d.ID}
-	i := sort.Search(len(s.order), func(i int) bool { return !s.order[i].less(k) })
-	s.order = append(s.order, sortKey{})
-	copy(s.order[i+1:], s.order[i:])
-	s.order[i] = k
+	i, _ := slices.BinarySearchFunc(s.order, k, sortKey.compare)
+	s.order = slices.Insert(s.order, i, k)
 	return stored.clone(), false, nil
 }
 
@@ -171,7 +165,7 @@ func (s *Store) List(cursor string, limit int) ([]Delivery, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		end = sort.Search(len(s.order), func(i int) bool { return !s.order[i].less(k) })
+		end, _ = slices.BinarySearchFunc(s.order, k, sortKey.compare) // first index not before the cursor
 	}
 
 	out := make([]Delivery, 0, min(limit, end))
@@ -222,11 +216,11 @@ func (s *Store) ApplyStatus(u StatusUpdate, now time.Time) ApplyResult {
 		s.park(ref, u, now)
 		return Unknown
 	}
-	return s.deliveries[id].apply(u, now)
+	return applyUpdate(s.deliveries[id], u, now)
 }
 
-// apply must be called with the store's lock held.
-func (d *Delivery) apply(u StatusUpdate, now time.Time) ApplyResult {
+// applyUpdate changes a delivery owned by the store; hold s.mu for writing.
+func applyUpdate(d *Delivery, u StatusUpdate, now time.Time) ApplyResult {
 	d.SyncedAt = now
 	if u.Sequence <= d.Sequence {
 		return Stale
