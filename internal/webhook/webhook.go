@@ -96,9 +96,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			c.OutOfOrderDropped.Add(1)
 			outcome = "out_of_order"
 		case dispatch.Unknown:
-			// Ack anyway: retrying won't help, and get_delivery reconciles.
-			c.UnknownDropped.Add(1)
-			outcome = "unknown_delivery"
+			// Ack anyway. The store holds the update until the booking it
+			// belongs to is recorded, and get_delivery's polling covers the rest.
+			c.UnknownDelivery.Add(1)
+			outcome = "parked"
 		}
 	}
 	h.Logger.Info("webhook", "partner", name, "event_id", ev.ID, "status", ev.Status, "sequence", ev.Sequence, "outcome", outcome)
