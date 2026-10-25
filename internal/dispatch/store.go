@@ -1,0 +1,231 @@
+package dispatch
+
+import (
+	"encoding/base64"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Limits bound the memory a public demo can be made to use.
+type Limits struct {
+	MaxDeliveries int
+	MaxQuotes     int
+	MaxSeenEvents int
+	SeenEventTTL  time.Duration
+}
+
+func DefaultLimits() Limits {
+	return Limits{MaxDeliveries: 500, MaxQuotes: 2000, MaxSeenEvents: 10000, SeenEventTTL: 24 * time.Hour}
+}
+
+// Store keeps all state in memory behind one RWMutex. Every read returns a
+// copy, so callers can never touch the store's data without the lock.
+type Store struct {
+	limits Limits
+
+	mu         sync.RWMutex
+	quotes     map[string]Quote
+	deliveries map[string]*Delivery
+	byQuote    map[string]string     // quote ID → delivery ID
+	byPartner  map[partnerRef]string // partner's delivery → our delivery ID
+	order      []sortKey             // ascending (CreatedAt, ID), for cursor pagination
+	seen       map[string]time.Time  // webhook event ID → first seen
+}
+
+type partnerRef struct{ partner, id string }
+
+type sortKey struct {
+	created time.Time
+	id      string
+}
+
+func (a sortKey) less(b sortKey) bool {
+	if !a.created.Equal(b.created) {
+		return a.created.Before(b.created)
+	}
+	return a.id < b.id
+}
+
+func NewStore(l Limits) *Store {
+	return &Store{
+		limits:     l,
+		quotes:     map[string]Quote{},
+		deliveries: map[string]*Delivery{},
+		byQuote:    map[string]string{},
+		byPartner:  map[partnerRef]string{},
+		seen:       map[string]time.Time{},
+	}
+}
+
+// PutQuotes stores new quotes, first dropping the ones that have expired.
+func (s *Store) PutQuotes(qs []Quote, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, q := range s.quotes {
+		if !now.Before(q.ExpiresAt) {
+			delete(s.quotes, id)
+		}
+	}
+	if len(s.quotes)+len(qs) > s.limits.MaxQuotes {
+		return ErrCapacity
+	}
+	for _, q := range qs {
+		s.quotes[q.ID] = q
+	}
+	return nil
+}
+
+func (s *Store) Quote(id string, now time.Time) (Quote, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	q, ok := s.quotes[id]
+	switch {
+	case !ok:
+		return Quote{}, ErrQuoteNotFound
+	case !now.Before(q.ExpiresAt):
+		return Quote{}, ErrQuoteExpired
+	}
+	return q, nil
+}
+
+// AddDelivery stores d unless a delivery for the same quote exists, in which
+// case it returns that one and true. One quote can never become two
+// deliveries, however many times or however concurrently it is booked.
+func (s *Store) AddDelivery(d Delivery) (Delivery, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id, ok := s.byQuote[d.QuoteID]; ok {
+		return s.deliveries[id].clone(), true, nil
+	}
+	if len(s.deliveries) >= s.limits.MaxDeliveries {
+		return Delivery{}, false, ErrCapacity
+	}
+	stored := d.clone()
+	s.deliveries[d.ID] = &stored
+	s.byQuote[d.QuoteID] = d.ID
+	s.byPartner[partnerRef{d.Partner, d.PartnerDeliveryID}] = d.ID
+
+	k := sortKey{d.CreatedAt, d.ID}
+	i := sort.Search(len(s.order), func(i int) bool { return !s.order[i].less(k) })
+	s.order = append(s.order, sortKey{})
+	copy(s.order[i+1:], s.order[i:])
+	s.order[i] = k
+	return stored.clone(), false, nil
+}
+
+func (s *Store) Delivery(id string) (Delivery, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, ok := s.deliveries[id]
+	if !ok {
+		return Delivery{}, ErrDeliveryNotFound
+	}
+	return d.clone(), nil
+}
+
+// List returns deliveries newest first. The cursor names the last item of
+// the previous page, not an offset, so deliveries created between two calls
+// never shift or repeat items on later pages.
+func (s *Store) List(cursor string, limit int) ([]Delivery, string, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	end := len(s.order) // walk backwards from just before end
+	if cursor != "" {
+		k, err := decodeCursor(cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		end = sort.Search(len(s.order), func(i int) bool { return !s.order[i].less(k) })
+	}
+
+	out := make([]Delivery, 0, min(limit, end))
+	i := end - 1
+	for ; i >= 0 && len(out) < limit; i-- {
+		d := s.deliveries[s.order[i].id].clone()
+		d.History = nil // list is a summary; get_delivery has the history
+		out = append(out, d)
+	}
+	next := ""
+	if i >= 0 && len(out) > 0 {
+		last := out[len(out)-1]
+		next = encodeCursor(sortKey{last.CreatedAt, last.ID})
+	}
+	return out, next, nil
+}
+
+func encodeCursor(k sortKey) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(k.created.UnixNano(), 10) + "|" + k.id))
+}
+
+func decodeCursor(c string) (sortKey, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		return sortKey{}, ErrInvalidCursor
+	}
+	ts, id, ok := strings.Cut(string(raw), "|")
+	if !ok || id == "" {
+		return sortKey{}, ErrInvalidCursor
+	}
+	nanos, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return sortKey{}, ErrInvalidCursor
+	}
+	return sortKey{time.Unix(0, nanos).UTC(), id}, nil
+}
+
+// ApplyStatus applies a partner's update if it is newer than what we hold.
+// Webhooks can arrive late, twice or out of order; the partner's sequence
+// number, not arrival order, decides.
+func (s *Store) ApplyStatus(u StatusUpdate, now time.Time) ApplyResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.byPartner[partnerRef{u.Partner, u.PartnerDeliveryID}]
+	if !ok {
+		return Unknown
+	}
+	d := s.deliveries[id]
+	d.SyncedAt = now
+	if u.Sequence <= d.Sequence {
+		return Stale
+	}
+	d.Status = u.Status
+	d.Sequence = u.Sequence
+	d.UpdatedAt = u.At
+	d.LastUpdateSource = u.Source
+	d.History = append(d.History, HistoryEntry{Status: u.Status, At: u.At, Source: u.Source})
+	return Applied
+}
+
+// MarkEvent records a webhook event ID and reports whether it was already
+// seen within the TTL. This is what makes webhook redelivery harmless.
+func (s *Store) MarkEvent(id string, now time.Time) (duplicate bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if at, ok := s.seen[id]; ok && now.Sub(at) < s.limits.SeenEventTTL {
+		return true
+	}
+	if len(s.seen) >= s.limits.MaxSeenEvents {
+		for k, at := range s.seen {
+			if now.Sub(at) >= s.limits.SeenEventTTL {
+				delete(s.seen, k)
+			}
+		}
+		// Still full: forget arbitrary entries. A forgotten duplicate is
+		// still caught by ApplyStatus's sequence check.
+		for k := range s.seen {
+			if len(s.seen) < s.limits.MaxSeenEvents {
+				break
+			}
+			delete(s.seen, k)
+		}
+	}
+	s.seen[id] = now
+	return false
+}
