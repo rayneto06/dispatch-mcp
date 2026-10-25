@@ -17,6 +17,19 @@ SECRETS=(partner-api-key webhook-secret mcp-token)
 
 gc() { gcloud --project "$PROJECT_ID" --quiet "$@"; }
 
+ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
+
+# save_env KEY VALUE FILE sets KEY=VALUE in FILE, keeping its other lines,
+# and leaves the file readable only by its owner.
+save_env() {
+  local key=$1 value=$2 file=$3
+  (
+    umask 077
+    { grep -v "^$key=" "$file" 2>/dev/null || true; echo "$key=$value"; } > "$file.tmp"
+    mv "$file.tmp" "$file"
+  )
+}
+
 # IAM is eventually consistent: a service account created a moment ago can be
 # "not found" by the next call. Retry with a growing pause.
 retry() {
@@ -102,8 +115,11 @@ gc run deploy dispatch-mcp "${common[@]}" \
   --set-secrets=PARTNER_API_KEY=partner-api-key:latest,WEBHOOK_SECRET=webhook-secret:latest,MCP_TOKEN=mcp-token:latest \
   --set-env-vars=TRANSPORT=http,FLEET_BASE_URL="$FLEET_URL"
 
+# The MCP URL carries the token, so it goes to the gitignored .env instead of
+# the terminal, where it would end up in scrollback and logs.
 TOKEN=$(gc secrets versions access latest --secret=mcp-token)
+save_env MCP_URL "$DISPATCH_URL/mcp/$TOKEN" "$ENV_FILE"
 echo
 echo "fakefleet health:    $FLEET_URL/health"
 echo "dispatch-mcp health: $DISPATCH_URL/health"
-echo "MCP URL (keep private): $DISPATCH_URL/mcp/$TOKEN"
+echo "MCP URL:             $DISPATCH_URL/mcp/${TOKEN:0:4}… (full URL saved to $ENV_FILE as MCP_URL)"

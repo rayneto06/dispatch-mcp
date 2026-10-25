@@ -4,5 +4,6 @@ GO-NOTES.md
 docs/superpowers/
 bin/
 .env*
+!.env.example
 *.test
 *.out
