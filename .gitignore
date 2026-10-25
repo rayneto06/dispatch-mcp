@@ -1,0 +1,8 @@
+.claude/settings.local.json
+.claude/.cc-writes/
+GO-NOTES.md
+docs/superpowers/
+bin/
+.env*
+*.test
+*.out
