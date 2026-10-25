@@ -1,4 +1,5 @@
 bin/
 .env*
+!.env.example
 *.test
 *.out

@@ -146,8 +146,9 @@ gcloud logging read 'jsonPayload.request_id="req_3f9a1c0b7d2e"' --project my-pro
 ```sh
 go test -race ./...
 
-# Against a deployment:
-MCP_URL="<MCP_URL>" go test -tags smoke -v ./internal/smoke
+# Against a deployment (MCP_URL comes from .env, see Deploy):
+set -a; . ./.env; set +a
+go test -tags smoke -v ./internal/smoke
 ```
 
 CI runs `gofmt`, `go vet` and the race-enabled tests on every push. Unit
@@ -161,7 +162,9 @@ partner books and then fails, and sends every webhook twice.
 `deploy/deploy.sh` builds one image with Cloud Build and deploys two Cloud
 Run services, `dispatch-mcp` and `fakefleet`, in their own project. It
 creates the project if needed, the secrets in Secret Manager and a service
-account that can only read them. It is safe to re-run.
+account that can only read them. It is safe to re-run. The MCP URL carries
+the token, so the script writes it to `.env` (gitignored, mode 600) as
+`MCP_URL` instead of printing it; `.env.example` lists the variables.
 
 ```sh
 PROJECT_ID=my-project BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX bash deploy/deploy.sh
