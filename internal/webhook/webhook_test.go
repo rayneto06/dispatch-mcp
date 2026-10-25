@@ -86,6 +86,8 @@ func TestWebhook(t *testing.T) {
 		{"missing fields, signed", "/webhooks/alpha", `{"id":"evt_9"}`, t0, true, 400, alpha.WebhooksReceived.Load, 0, dispatch.StatusAssigned},
 		{"unknown partner path", "/webhooks/delta", eventJSON("evt_4", "delta", "x", "assigned", 2), t0, true, 404,
 			alpha.WebhooksReceived.Load, 0, dispatch.StatusAssigned},
+		{"unknown status, signed", "/webhooks/alpha", eventJSON("evt_8", "alpha", "alpha_1", "teleported", 9), t0, true, 400,
+			alpha.WebhooksReceived.Load, 0, dispatch.StatusAssigned},
 		{"partner mismatch", "/webhooks/alpha", eventJSON("evt_5", "beta", "alpha_1", "delivered", 4), t0, true, 400,
 			alpha.WebhooksReceived.Load, 0, dispatch.StatusAssigned},
 		{"valid delivered", "/webhooks/alpha", eventJSON("evt_6", "alpha", "alpha_1", "delivered", 4), t0, true, 200,

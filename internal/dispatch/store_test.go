@@ -277,3 +277,12 @@ func TestEarlyUpdatesExpireAndStayBounded(t *testing.T) {
 		t.Errorf("stale parked update applied: status %s", got.Status)
 	}
 }
+
+func TestParseStatus(t *testing.T) {
+	for in, ok := range map[string]bool{"pending": true, "assigned": true, "picked_up": true, "delivered": true, "lost": false, "": false, "Delivered": false} {
+		got, gotOK := ParseStatus(in)
+		if gotOK != ok || (ok && string(got) != in) {
+			t.Errorf("ParseStatus(%q) = %q, %v", in, got, gotOK)
+		}
+	}
+}

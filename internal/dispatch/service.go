@@ -133,7 +133,7 @@ collect:
 		case r := <-results:
 			answered[r.partner] = true
 			if r.err != nil {
-				out.Unavailable = append(out.Unavailable, Unavailable{r.partner, s.reason(r.partner, r.err)})
+				out.Unavailable = append(out.Unavailable, Unavailable{r.partner, reason(r.partner, r.err, s.cfg.QuoteDeadline)})
 				allWaking = allWaking && wakingUp(r.err)
 				continue
 			}
@@ -144,7 +144,7 @@ collect:
 	}
 	for _, p := range s.partners {
 		if !answered[p.Name()] {
-			out.Unavailable = append(out.Unavailable, Unavailable{p.Name(), s.timedOut()})
+			out.Unavailable = append(out.Unavailable, Unavailable{p.Name(), timedOut(s.cfg.QuoteDeadline)})
 		}
 	}
 	slices.SortStableFunc(out.Quotes, func(a, b Quote) int {
@@ -233,7 +233,10 @@ func (s *Service) Create(ctx context.Context, quoteID string) (Delivery, bool, e
 	}
 
 	now := s.now()
-	status := Status(pd.Status)
+	status, ok := ParseStatus(pd.Status)
+	if !ok {
+		status = StatusPending // the partner accepted the booking; record it either way
+	}
 	return s.store.AddDelivery(Delivery{
 		ID:                newID("d_"),
 		QuoteID:           quoteID,
@@ -277,9 +280,13 @@ func (s *Service) Get(ctx context.Context, id string) (Delivery, string, error) 
 	case errors.Is(err, partner.ErrNotFound):
 		return d, fmt.Sprintf("partner %s no longer knows this delivery (the demo partner restarted)", d.Partner), nil
 	case err != nil:
-		return d, fmt.Sprintf("could not refresh from partner %s: %s", d.Partner, s.reason(d.Partner, err)), nil
+		return d, fmt.Sprintf("could not refresh from partner %s: %s", d.Partner, reason(d.Partner, err, s.cfg.PollBudget)), nil
 	}
 
+	status, ok := ParseStatus(pd.Status)
+	if !ok {
+		return d, fmt.Sprintf("partner %s reported an unknown status %q", d.Partner, pd.Status), nil
+	}
 	at := pd.UpdatedAt
 	if at.IsZero() {
 		at = s.now()
@@ -287,7 +294,7 @@ func (s *Service) Get(ctx context.Context, id string) (Delivery, string, error) 
 	s.store.ApplyStatus(StatusUpdate{
 		Partner:           d.Partner,
 		PartnerDeliveryID: d.PartnerDeliveryID,
-		Status:            Status(pd.Status),
+		Status:            status,
 		Sequence:          pd.Sequence,
 		At:                at,
 		Source:            SourcePoll,
@@ -306,16 +313,17 @@ func (s *Service) List(cursor string, limit int) ([]Delivery, string, error) {
 	return s.store.List(cursor, limit)
 }
 
-// reason turns a partner error into the short text an agent reads.
-func (s *Service) reason(name string, err error) string {
+// reason turns a partner error into the short text an agent reads. budget
+// is the deadline the call ran under, reported when it ran out.
+func reason(name string, err error, budget time.Duration) string {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return s.timedOut()
+		return timedOut(budget)
 	}
 	return strings.TrimPrefix(err.Error(), "partner "+name+": ")
 }
 
-func (s *Service) timedOut() string {
-	return "timed out after " + s.cfg.QuoteDeadline.String()
+func timedOut(budget time.Duration) string {
+	return "timed out after " + budget.String()
 }
 
 // wakingUp reports failures where the partner never answered at all, which

@@ -107,6 +107,14 @@ func (t *tools) quote(ctx context.Context, _ *mcp.CallToolRequest, in quoteInput
 
 func (t *tools) create(ctx context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, createOutput, error) {
 	d, already, err := t.svc.Create(ctx, in.QuoteID)
+	var apiErr *partner.APIError
+	if errors.As(err, &apiErr) && !apiErr.Rejected() {
+		// Only the last attempt is in the error. An earlier one may have
+		// booked (the partner committed, then failed to answer), so the
+		// safe advice is the idempotent retry, not a second partner.
+		return nil, createOutput{}, fmt.Errorf("%v; the booking may still have gone through, "+
+			"so call create_delivery again with the same quote_id before booking another quote", err)
+	}
 	if err != nil {
 		return nil, createOutput{}, t.toolError(ctx, err)
 	}
