@@ -1,5 +1,7 @@
 # dispatch-mcp
 
+[![ci](https://github.com/rayneto06/dispatch-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/rayneto06/dispatch-mcp/actions/workflows/ci.yml)
+
 An MCP server, written in Go, that lets an AI agent quote, book and track
 last-mile deliveries across several fleet partners.
 
@@ -38,8 +40,8 @@ fakefleet: partners alpha, beta, gamma
 | beta | slow to quote (0.8–2.5 s), often misses the 1.5 s quote round |
 | gamma | cheapest; 15% 429 with `Retry-After`, 15% 503, and 10% "books the delivery, then answers 503" |
 
-Deliveries go `pending → assigned → picked_up → delivered` in about two and
-a half minutes, each step reported by webhook.
+Deliveries go `pending → assigned → picked_up → delivered` in two to three
+minutes, each step reported by webhook.
 
 ## Tools
 
@@ -132,7 +134,12 @@ Both services scale to zero. The first call after a quiet period wakes them
 
 Logs are JSON on stderr, in the shape Cloud Logging reads. Every MCP request
 gets a request ID that is logged with each partner call it makes and sent to
-the partner as `X-Request-ID`.
+the partner as `X-Request-ID`, so one tool call can be followed across both
+services:
+
+```sh
+gcloud logging read 'jsonPayload.request_id="req_3f9a1c0b7d2e"' --project my-project --format json
+```
 
 ## Tests
 
@@ -143,7 +150,8 @@ go test -race ./...
 MCP_URL="<MCP_URL>" go test -tags smoke -v ./internal/smoke
 ```
 
-Unit tests use `httptest` servers for the partner, OSRM and webhook sides.
+CI runs `gofmt`, `go vet` and the race-enabled tests on every push. Unit
+tests use `httptest` servers for the partner, OSRM and webhook sides.
 `cmd/dispatch-mcp` has end-to-end tests that drive the real server through
 an in-memory MCP client against an in-process fleet, including one where the
 partner books and then fails, and sends every webhook twice.
