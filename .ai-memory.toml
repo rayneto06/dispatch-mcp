@@ -1,0 +1,15 @@
+# ai-memory capture opt-in (raybrain-workshop: docs/runbooks/ai-memory-install.md, step 7). This
+# machine runs ai-memory in allowlist mode: a checkout without this file emits no event. Committed,
+# so every worktree, the ones outside the home directory included, routes to the same project.
+workspace = "default"
+project = "go-mcp-poc"
+
+# The records this repository owns until the knowledge move (DECISIONS.md, GO-NOTES.md, and
+# the raybrain-era backlog and session state should it grow them), kept out of capture so the wiki
+# never compiles a copy that goes stale; then scratch, and the .env files (a `**/` needs a directory).
+[capture]
+ignore_paths = ["DECISIONS.md", "GO-NOTES.md", "knowledge/**", "docs/backlog/**", "docs/backlog.md", ".claude/session-state.md", "tmp/**", ".env", "**/.env", ".env.*", "**/.env.*"]
+
+# The project brief at every session start, at its 4,000-character default until it is measured.
+[briefing]
+inject_on_session_start = "true"
