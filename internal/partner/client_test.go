@@ -3,6 +3,7 @@ package partner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -341,5 +342,82 @@ func TestUnexpectedStatusMessage(t *testing.T) {
 	}
 	if n := len(f.script.requests()); n != 1 {
 		t.Errorf("attempts = %d, want 1 (not retryable)", n)
+	}
+}
+
+// bodyClient returns a client whose partner answers every request with
+// status and body.
+func bodyClient(t *testing.T, status int, body string) (*Client, *health.Counters) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(status)
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	counters := &health.Counters{}
+	c := New(Config{
+		Name:     "gamma",
+		BaseURL:  srv.URL + "/gamma/v1",
+		APIKey:   "k",
+		Counters: counters,
+		Logger:   slog.New(slog.DiscardHandler),
+		Sleep:    func(context.Context, time.Duration) error { return nil },
+	})
+	return c, counters
+}
+
+// assertInvalidResponse checks the error a 2xx with an unusable body gives:
+// an *APIError that keeps the status, is not a rejection (the partner may
+// have acted) and says what was wrong.
+func assertInvalidResponse(t *testing.T, err error, status int) {
+	t.Helper()
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v (%T), want *APIError", err, err)
+	}
+	if apiErr.StatusCode != status || apiErr.Rejected() {
+		t.Errorf("status = %d, rejected = %v; want %d, not rejected", apiErr.StatusCode, apiErr.Rejected(), status)
+	}
+	if want := fmt.Sprintf("partner gamma: unexpected response (%d): ", status); !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("message = %q, want prefix %q", err.Error(), want)
+	}
+}
+
+func TestInvalidQuoteBodies(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"price_cents":0,"currency":"USD"}`,
+		`{"price_cents":1500}`,
+		`{"price_cents":1500,"currency":"USD","pickup_eta_s":-60}`,
+		`<html>`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			c, counters := bodyClient(t, http.StatusOK, body)
+			err := quoteCall(context.Background(), c)
+			assertInvalidResponse(t, err, http.StatusOK)
+			if n := counters.QuotesReturned.Load(); n != 0 {
+				t.Errorf("quotes returned = %d, want 0", n)
+			}
+		})
+	}
+}
+
+func TestInvalidDeliveryBodies(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		call   func(context.Context, *Client) error
+	}{
+		{"create without id", http.StatusCreated, `{"status":"pending","sequence":1}`, createCall},
+		{"create not json", http.StatusCreated, `<html>`, createCall},
+		{"get without id", http.StatusOK, `{}`, getCall},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := bodyClient(t, tt.status, tt.body)
+			assertInvalidResponse(t, tt.call(context.Background(), c), tt.status)
+		})
 	}
 }

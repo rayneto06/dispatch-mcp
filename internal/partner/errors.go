@@ -43,6 +43,8 @@ func (e *APIError) Error() string {
 		return p + "not found (404)"
 	case e.StatusCode >= 400:
 		return fmt.Sprintf("%srejected (%d): %s", p, e.StatusCode, e.Body)
+	case e.StatusCode != 0 && e.Err != nil:
+		return fmt.Sprintf("%sunexpected response (%d): %v", p, e.StatusCode, e.Err)
 	case e.StatusCode != 0:
 		return fmt.Sprintf("%sunexpected response (%d)", p, e.StatusCode)
 	case errors.Is(e.Err, context.Canceled):
