@@ -35,8 +35,16 @@ type Deps struct {
 }
 
 func New(d Deps) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "dispatch-mcp", Version: "0.1.0"},
-		&mcp.ServerOptions{Instructions: Instructions, Logger: d.Logger})
+	// Advertise only what this server delivers. The SDK's defaults add
+	// logging and tools.listChanged; the tool list never changes and nothing
+	// logs to clients, and a client told that tools can change holds a
+	// subscriptions/listen stream open (5 minutes at a time, as seen in
+	// production logs), which keeps a scale-to-zero instance busy.
+	s := mcp.NewServer(&mcp.Implementation{Name: "dispatch-mcp", Version: "0.1.0"}, &mcp.ServerOptions{
+		Instructions: Instructions,
+		Logger:       d.Logger,
+		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
+	})
 	t := &tools{svc: d.Service, health: d.Health, logger: d.Logger}
 	t.register(s)
 	s.AddReceivingMiddleware(logging(d.Logger, d.OnRequest))
