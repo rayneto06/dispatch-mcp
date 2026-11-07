@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"math"
@@ -67,7 +68,8 @@ func (f *Fleet) api(h apiHandler, isQuote bool) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "unknown partner")
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer "+f.cfg.APIKey {
+		// Constant time, like the MCP token check: timing must not leak the key.
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+f.cfg.APIKey)) != 1 {
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
