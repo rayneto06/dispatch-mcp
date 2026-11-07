@@ -343,6 +343,59 @@ func TestCreateAtCapacityDoesNotBook(t *testing.T) {
 	}
 }
 
+// The partner may commit a booking after the caller has gone (a dropped
+// connection, a cancelled MCP request); it must still be recorded.
+func TestCreateFinishesAfterCallerCancels(t *testing.T) {
+	entered, proceed := make(chan struct{}), make(chan struct{})
+	alpha := &dispatchtest.Partner{PartnerName: "alpha", CreateFn: func(ctx context.Context, key string, req partner.CreateRequest) (partner.Delivery, error) {
+		close(entered)
+		<-proceed
+		if err := ctx.Err(); err != nil {
+			return partner.Delivery{}, err
+		}
+		return partner.Delivery{ID: "alpha_1", Status: "pending", Sequence: 1}, nil
+	}}
+	e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, alpha)
+	q := quoteOne(t, e)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := e.svc.Create(ctx, q.ID)
+		done <- err
+	}()
+	<-entered
+	cancel()
+	close(proceed)
+
+	if err := <-done; err != nil {
+		t.Fatalf("Create after the caller cancelled = %v, want the booking recorded", err)
+	}
+	if _, ok := e.store.DeliveryByQuote(q.ID); !ok {
+		t.Error("booking not recorded")
+	}
+}
+
+// Quotes have no side effects, so they keep stopping when the caller goes.
+func TestQuoteAllStopsWhenCallerCancels(t *testing.T) {
+	alpha := &dispatchtest.Partner{PartnerName: "alpha", QuoteFn: func(ctx context.Context, req partner.QuoteRequest) (partner.Quote, error) {
+		<-ctx.Done()
+		return partner.Quote{}, ctx.Err()
+	}}
+	e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, alpha)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := e.svc.QuoteAll(ctx, ferryBuilding, missionDolores)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("QuoteAll took %v after the caller cancelled at 50ms; the 1.5s quote deadline must not be what stops it", elapsed)
+	}
+	if !errors.Is(err, ErrNoQuotes) {
+		t.Errorf("err = %v, want ErrNoQuotes", err)
+	}
+}
+
 func TestGetReconciles(t *testing.T) {
 	var polls int
 	alpha := &dispatchtest.Partner{PartnerName: "alpha", GetFn: func(_ context.Context, id string) (partner.Delivery, error) {

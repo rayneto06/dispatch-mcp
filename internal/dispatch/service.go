@@ -225,7 +225,10 @@ func (s *Service) Create(ctx context.Context, quoteID string) (Delivery, bool, e
 		return Delivery{}, false, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, s.cfg.CreateTimeout)
+	// The partner may commit the booking at any moment of this call, so a
+	// caller hanging up must not abandon it: the booking runs to completion
+	// (bounded by CreateTimeout) and is recorded either way.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cfg.CreateTimeout)
 	defer cancel()
 	pd, err := p.CreateDelivery(ctx, quoteID, partner.CreateRequest{
 		Pickup:          q.Pickup,

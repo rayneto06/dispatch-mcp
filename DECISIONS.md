@@ -55,6 +55,15 @@ store refuses a second delivery for the same quote, so concurrent calls
 converge on one booking. Asking the agent for a key would add a way to get
 it wrong.
 
+**A booking outlives the caller.** Quotes and reads stop when the MCP client
+cancels or hangs up, but a booking does not: the partner may already have
+committed, and abandoning the call would leave a delivery only the partner
+knows about. It runs to completion within its own 8 s budget and is
+recorded. On request-billed Cloud Run, which is how `deploy/deploy.sh` runs
+`dispatch-mcp`, CPU outside a request is throttled, so there this is best
+effort; repeating `create_delivery` with the same quote ID still recovers
+the booking.
+
 **Retry only when it is safe and useful.** Safe: a GET, a POST with no side
 effects (quotes), or a POST carrying an idempotency key. Useful: 429, 5xx,
 timeouts and connection errors; never other 4xx. At most three attempts.
