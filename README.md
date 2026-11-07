@@ -16,8 +16,8 @@ purpose: one is slow, one rate-limits and fails, and all of them sometimes
 deliver the same webhook twice. Routing uses the public
 [OSRM](https://project-osrm.org/) demo server.
 
-This is a learning project, built to get hands-on with Go. It runs on Cloud
-Run, but it is a proof of concept, not a production system;
+This is a learning project, built to get hands-on with Go. It deploys to
+Cloud Run, but it is a proof of concept, not a production system;
 [DECISIONS.md](DECISIONS.md) says what would change for production.
 
 ## Architecture
@@ -53,9 +53,9 @@ minutes, each step reported by webhook.
 | `list_deliveries` | Newest first, cursor-paginated. |
 | `partner_health` | Per partner: requests, retries, 429s, 5xx, timeouts, webhooks received, duplicates and out-of-order events dropped, bad signatures. Plus OSRM calls and fallbacks. |
 
-## A session against the hosted server
+## A session against a hosted deployment
 
-Tool calls made by `internal/smoke` against the Cloud Run deployment
+Tool calls made by `internal/smoke` against a Cloud Run deployment
 (abridged), from the Ferry Building to Mission Dolores in San Francisco:
 
 ```jsonc
@@ -99,11 +99,15 @@ With the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
 npx @modelcontextprotocol/inspector -e PARTNER_API_KEY=dev -e WEBHOOK_SECRET=dev bin/dispatch-mcp
 ```
 
-## Use the hosted demo
+## Connect to a deployment
 
-The hosted endpoint is one URL with a secret path segment, shared
-privately. It works with any MCP client that supports remote servers over
-Streamable HTTP; there is no OAuth step, because the URL is the credential.
+No public instance is running. Run it locally as above, or
+[deploy your own](#deploy).
+
+A deployment's endpoint is one URL with a secret path segment, which
+`deploy/deploy.sh` saves to `.env` as `MCP_URL`. It works with any MCP client
+that supports remote servers over Streamable HTTP; there is no OAuth step,
+because the URL is the credential.
 
 | Client | How to connect |
 |---|---|
