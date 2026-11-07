@@ -128,6 +128,17 @@ func (s *Store) AddDelivery(d Delivery) (Delivery, bool, error) {
 	return stored.clone(), false, nil
 }
 
+// CheckDeliveryCapacity returns ErrCapacity when no more deliveries fit, so
+// a booking can be refused before the partner is asked.
+func (s *Store) CheckDeliveryCapacity() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.deliveries) >= s.limits.MaxDeliveries {
+		return ErrCapacity
+	}
+	return nil
+}
+
 // DeliveryByQuote returns the delivery booked from a quote, if any.
 func (s *Store) DeliveryByQuote(quoteID string) (Delivery, bool) {
 	s.mu.RLock()

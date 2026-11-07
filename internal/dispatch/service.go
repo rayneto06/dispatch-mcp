@@ -219,6 +219,11 @@ func (s *Service) Create(ctx context.Context, quoteID string) (Delivery, bool, e
 	if !ok {
 		return Delivery{}, false, fmt.Errorf("quote %s names unknown partner %q", quoteID, q.Partner)
 	}
+	// Refuse before the partner books: a booking the store cannot hold would
+	// exist only at the partner. AddDelivery checks again for concurrent calls.
+	if err := s.store.CheckDeliveryCapacity(); err != nil {
+		return Delivery{}, false, err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.cfg.CreateTimeout)
 	defer cancel()

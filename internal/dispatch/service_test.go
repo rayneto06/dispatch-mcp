@@ -319,6 +319,30 @@ func TestCreateRecordsDelivery(t *testing.T) {
 	}
 }
 
+// A full store must refuse before the partner books, or the partner holds a
+// booking nobody can see.
+func TestCreateAtCapacityDoesNotBook(t *testing.T) {
+	alpha := &dispatchtest.Partner{PartnerName: "alpha"}
+	e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, alpha)
+	e.store.limits.MaxDeliveries = 1
+	first := quoteOne(t, e)
+	if _, _, err := e.svc.Create(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	second := quoteOne(t, e)
+	if _, _, err := e.svc.Create(context.Background(), second.ID); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("err = %v, want ErrCapacity", err)
+	}
+	if n := alpha.Bookings(); n != 1 {
+		t.Errorf("partner bookings = %d, want 1", n)
+	}
+
+	if _, already, err := e.svc.Create(context.Background(), first.ID); err != nil || !already {
+		t.Errorf("repeat of a booked quote at capacity: already = %v, err = %v; want the existing delivery", already, err)
+	}
+}
+
 func TestGetReconciles(t *testing.T) {
 	var polls int
 	alpha := &dispatchtest.Partner{PartnerName: "alpha", GetFn: func(_ context.Context, id string) (partner.Delivery, error) {
