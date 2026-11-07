@@ -25,7 +25,7 @@ create_delivery is idempotent per quote_id: repeating it never books twice, so r
 
 The partners misbehave on purpose (beta is slow to quote, gamma is cheap but flaky). partner_health shows the retries, rate limits, timeouts and duplicate webhooks the server absorbed.
 
-This is a demo: state lives in memory and resets after about 15 minutes without traffic, and the first call after idle can take a few seconds.`
+This is a demo: state lives in memory and is lost when the server restarts. A hosted instance restarts after about 15 minutes without traffic, and its first call after idle can take a few seconds.`
 
 type Deps struct {
 	Service   *dispatch.Service

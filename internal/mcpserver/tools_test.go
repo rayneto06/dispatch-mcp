@@ -131,7 +131,7 @@ func TestToolErrorsAreAgentReadable(t *testing.T) {
 		want       string
 	}{
 		{"unknown quote", "create_delivery", map[string]any{"quote_id": "q_nope"}, "quote_id not found; call quote_delivery to get a fresh quote"},
-		{"unknown delivery", "get_delivery", map[string]any{"delivery_id": "d_nope"}, "resets after about 15 minutes without traffic"},
+		{"unknown delivery", "get_delivery", map[string]any{"delivery_id": "d_nope"}, "lost when the server restarts"},
 		{"bad latitude", "quote_delivery", map[string]any{"pickup": geo.Point{Lat: 200}, "dropoff": missionDolores}, "lat must be between"},
 		{"same point", "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": ferryBuilding}, "pickup and dropoff are the same point"},
 		{"too far", "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": geo.Point{Lat: 37.3382, Lon: -121.8863}}, "more than 50 km apart"},

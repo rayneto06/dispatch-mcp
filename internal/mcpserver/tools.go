@@ -156,7 +156,8 @@ func (t *tools) toolError(ctx context.Context, err error) error {
 	case errors.Is(err, dispatch.ErrQuoteExpired):
 		return errors.New("quote expired; call quote_delivery again")
 	case errors.Is(err, dispatch.ErrDeliveryNotFound):
-		return errors.New("delivery_id not found. This demo keeps state in memory and resets after about 15 minutes without traffic")
+		return errors.New("delivery_id not found. State lives in memory, so it is lost when the server restarts " +
+			"(a hosted instance restarts after about 15 minutes without traffic)")
 	case errors.Is(err, dispatch.ErrOutOfArea):
 		return errors.New("pickup and dropoff are more than 50 km apart; this service only handles last-mile deliveries")
 	case errors.Is(err, dispatch.ErrSamePoint):
