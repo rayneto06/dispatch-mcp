@@ -52,7 +52,9 @@ func (e *APIError) Error() string {
 	case isTimeout(e.Err):
 		return fmt.Sprintf("%stimed out after %s", p, attempts(e.Attempts))
 	default:
-		return fmt.Sprintf("%sunreachable after %s: %v", p, attempts(e.Attempts), e.Err)
+		// e.Err names the partner's URL; it is logged with each attempt and
+		// left out here, because agents read this message.
+		return fmt.Sprintf("%sunreachable after %s", p, attempts(e.Attempts))
 	}
 }
 

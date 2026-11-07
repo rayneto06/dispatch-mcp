@@ -403,6 +403,33 @@ func TestInvalidQuoteBodies(t *testing.T) {
 	}
 }
 
+// The agent reads these messages, in tool results and in partner_health,
+// so they must not carry the partner's URL.
+func TestUnreachableMessageHasNoURL(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close() // nothing listens there any more
+	reg := health.NewRegistry([]string{"gamma"}, time.Now())
+	c := New(Config{
+		Name:     "gamma",
+		BaseURL:  srv.URL + "/gamma/v1",
+		APIKey:   "k",
+		Counters: reg.Partner("gamma"),
+		Logger:   slog.New(slog.DiscardHandler),
+		Sleep:    func(context.Context, time.Duration) error { return nil },
+	})
+
+	err := quoteCall(context.Background(), c)
+	if err == nil || !strings.Contains(err.Error(), "unreachable after") {
+		t.Fatalf("err = %v, want an unreachable error", err)
+	}
+	lastErr := reg.Snapshot().Partners[0].LastError
+	for _, msg := range []string{err.Error(), lastErr} {
+		if strings.Contains(msg, "127.0.0.1") || strings.Contains(msg, "http") {
+			t.Errorf("message exposes the partner URL: %q", msg)
+		}
+	}
+}
+
 func TestInvalidDeliveryBodies(t *testing.T) {
 	tests := []struct {
 		name   string

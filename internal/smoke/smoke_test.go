@@ -9,7 +9,9 @@ package smoke
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,19 +23,21 @@ func TestHostedFlow(t *testing.T) {
 	if url == "" {
 		t.Skip("MCP_URL not set")
 	}
+	// The URL carries the token, and transport errors quote it: never print it.
+	scrub := func(err error) string { return strings.ReplaceAll(fmt.Sprint(err), url, "$MCP_URL") }
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "smoke", Version: "0"}, nil).
 		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: url}, nil)
 	if err != nil {
-		t.Fatalf("connect: %v", err)
+		t.Fatalf("connect: %s", scrub(err))
 	}
 	defer cs.Close()
 
 	tools, err := cs.ListTools(ctx, nil)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(scrub(err))
 	}
 	if len(tools.Tools) != 5 {
 		t.Errorf("%d tools, want 5", len(tools.Tools))
@@ -44,7 +48,7 @@ func TestHostedFlow(t *testing.T) {
 		start := time.Now()
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+			t.Fatalf("%s: %s", name, scrub(err))
 		}
 		b, _ := json.MarshalIndent(res.StructuredContent, "", "  ")
 		if res.IsError {
