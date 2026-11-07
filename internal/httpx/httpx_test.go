@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,6 +10,75 @@ import (
 
 	"golang.org/x/time/rate"
 )
+
+// freeAddr returns a loopback address nothing listens on yet.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().String()
+}
+
+// waitListening blocks until addr accepts connections.
+func waitListening(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			c.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s is not listening: %v", addr, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A request in flight when shutdown starts finishes instead of being cut.
+func TestRunDrainsInFlightRequests(t *testing.T) {
+	addr := freeAddr(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, NewServer(addr, h), 2*time.Second) }()
+	waitListening(t, addr)
+
+	type result struct {
+		status int
+		err    error
+	}
+	got := make(chan result, 1)
+	go func() {
+		resp, err := http.Get("http://" + addr)
+		if err != nil {
+			got <- result{err: err}
+			return
+		}
+		resp.Body.Close()
+		got <- result{status: resp.StatusCode}
+	}()
+	<-entered
+	cancel()
+	time.Sleep(50 * time.Millisecond) // shutdown is under way
+	close(release)
+
+	if r := <-got; r.err != nil || r.status != http.StatusOK {
+		t.Errorf("in-flight request: status %d, err %v; want 200", r.status, r.err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("Run = %v, want nil", err)
+	}
+}
 
 var okHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)

@@ -345,6 +345,23 @@ func TestUnexpectedStatusMessage(t *testing.T) {
 	}
 }
 
+// Retrying in lockstep is what the jittered backoff exists to prevent, so
+// it must actually wait, and never past its cap (400 ms before the 3rd try).
+func TestBackoffActuallyWaits(t *testing.T) {
+	c := newFixture(t).client
+	waited := false
+	for range 50 {
+		d := c.backoff(2)
+		if d > 400*time.Millisecond {
+			t.Fatalf("backoff(2) = %v, want at most 400ms", d)
+		}
+		waited = waited || d > 0
+	}
+	if !waited {
+		t.Error("50 backoffs were all zero")
+	}
+}
+
 // bodyClient returns a client whose partner answers every request with
 // status and body.
 func bodyClient(t *testing.T, status int, body string) (*Client, *health.Counters) {

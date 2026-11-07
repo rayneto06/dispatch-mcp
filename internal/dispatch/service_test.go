@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rayneto06/dispatch-mcp/internal/dispatch/dispatchtest"
@@ -374,6 +375,25 @@ func TestCreateFinishesAfterCallerCancels(t *testing.T) {
 	if _, ok := e.store.DeliveryByQuote(q.ID); !ok {
 		t.Error("booking not recorded")
 	}
+}
+
+// A partner that answers after the quote round closed must still be able to
+// hand over its result, or its goroutine leaks for the life of the process.
+// synctest fails the test if any goroutine in the bubble is left blocked.
+func TestQuoteAllLatePartnerGoroutineExits(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		late := &dispatchtest.Partner{PartnerName: "beta", QuoteFn: func(context.Context, partner.QuoteRequest) (partner.Quote, error) {
+			time.Sleep(5 * time.Second) // ignores its context, like a stuck partner
+			return partner.Quote{PriceCents: 900, Currency: "USD"}, nil
+		}}
+		e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, priced("alpha", 1000), late)
+		res, err := e.svc.QuoteAll(context.Background(), ferryBuilding, missionDolores)
+		if err != nil || len(res.Quotes) != 1 {
+			t.Fatalf("QuoteAll = %d quotes, %v; want alpha only", len(res.Quotes), err)
+		}
+		time.Sleep(10 * time.Second) // beta answers after nobody is listening
+		synctest.Wait()
+	})
 }
 
 // Quotes have no side effects, so they keep stopping when the caller goes.

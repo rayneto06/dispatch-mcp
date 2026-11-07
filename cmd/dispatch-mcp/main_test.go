@@ -303,6 +303,66 @@ func postMCP(t *testing.T, url, body string, header http.Header) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
+// The ID that names an MCP request in the logs must reach the partner, so
+// one tool call can be followed across both services.
+func TestRequestIDReachesPartner(t *testing.T) {
+	var mu sync.Mutex
+	var ids []string
+	fleetStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/quotes") {
+			mu.Lock()
+			ids = append(ids, r.Header.Get("X-Request-ID"))
+			mu.Unlock()
+		}
+		io.WriteString(w, `{"price_cents":1500,"currency":"USD","pickup_eta_s":600,"valid_for_s":600}`)
+	}))
+	defer fleetStub.Close()
+	cfg, err := loadConfig(env(with(baseEnv(), "FLEET_BASE_URL", fleetStub.URL, "OSRM_BASE_URL", "http://127.0.0.1:9", "PARTNERS", "alpha")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(cfg, slog.New(slog.DiscardHandler), &http.Client{Timeout: 5 * time.Second})
+	ct, st := mcp.NewInMemoryTransports()
+	if _, err := a.mcp.Connect(context.Background(), st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(context.Background(), ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "quote_delivery",
+		Arguments: map[string]any{"pickup": ferryBuilding, "dropoff": missionDolores}})
+	if err != nil || res.IsError {
+		t.Fatalf("quote_delivery: err %v, result %+v", err, res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ids) != 1 || !strings.HasPrefix(ids[0], "req_") {
+		t.Errorf("X-Request-ID on the partner call = %q, want one req_ ID", ids)
+	}
+}
+
+// The token bucket protects the partners and OSRM from one noisy client.
+func TestHTTPModeRateLimitsMCP(t *testing.T) {
+	srv := httpModeServer(t)
+	limited := 0
+	for range 40 {
+		resp, err := http.Get(srv.URL + "/mcp/" + testToken)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited == 0 {
+		t.Error("40 back-to-back requests were never rate limited")
+	}
+}
+
 // Tool arguments are coordinates and IDs; a body this size is abuse.
 func TestHTTPModeRejectsLargeBodies(t *testing.T) {
 	srv := httpModeServer(t)
