@@ -108,14 +108,17 @@ func (t *tools) quote(ctx context.Context, _ *mcp.CallToolRequest, in quoteInput
 func (t *tools) create(ctx context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, createOutput, error) {
 	d, already, err := t.svc.Create(ctx, in.QuoteID)
 	var apiErr *partner.APIError
-	if errors.As(err, &apiErr) && !apiErr.Rejected() {
+	switch {
+	case errors.As(err, &apiErr) && apiErr.Rejected() && apiErr.Attempts == 1:
+		// A definite "no" to the only request sent: the partner holds nothing.
+		return nil, createOutput{}, fmt.Errorf("%v; nothing was booked. Choose another quote or call quote_delivery again", err)
+	case errors.As(err, &apiErr):
 		// Only the last attempt is in the error. An earlier one may have
 		// booked (the partner committed, then failed to answer), so the
 		// safe advice is the idempotent retry, not a second partner.
 		return nil, createOutput{}, fmt.Errorf("%v; the booking may still have gone through, "+
 			"so call create_delivery again with the same quote_id before booking another quote", err)
-	}
-	if err != nil {
+	case err != nil:
 		return nil, createOutput{}, t.toolError(ctx, err)
 	}
 	return nil, createOutput{Delivery: d, AlreadyBooked: already}, nil
@@ -144,9 +147,9 @@ func (t *tools) partnerHealth(context.Context, *mcp.CallToolRequest, healthInput
 // toolError turns an error into a message an agent can act on. A returned
 // error becomes a tool result with IsError set, which the model sees; a
 // protocol error would hide it. Anything unexpected is logged and reported
-// by request ID only.
+// by request ID only. Partner errors never get here: only create_delivery
+// can return one, and it words its own.
 func (t *tools) toolError(ctx context.Context, err error) error {
-	var apiErr *partner.APIError
 	switch {
 	case errors.Is(err, dispatch.ErrQuoteNotFound):
 		return errors.New("quote_id not found; call quote_delivery to get a fresh quote")
@@ -164,12 +167,6 @@ func (t *tools) toolError(ctx context.Context, err error) error {
 		return errors.New("demo capacity reached; try again later")
 	case errors.Is(err, dispatch.ErrInvalidLocation), errors.Is(err, dispatch.ErrNoQuotes):
 		return err
-	case errors.Is(err, partner.ErrRateLimited):
-		return fmt.Errorf("%v; try again after the retry-after delay or book another partner's quote", err)
-	case errors.Is(err, partner.ErrUnavailable):
-		return fmt.Errorf("%v; try again shortly or book another partner's quote", err)
-	case errors.As(err, &apiErr):
-		return fmt.Errorf("%v; repeating the same call is safe", err)
 	}
 	id := obs.RequestID(ctx)
 	t.logger.Error("tool failed", "request_id", id, "error", err)

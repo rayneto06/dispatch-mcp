@@ -149,6 +149,44 @@ func TestToolErrorsAreAgentReadable(t *testing.T) {
 	}
 }
 
+// A rejection is only proof that nothing was booked when it answered the
+// first attempt: after a retry, an earlier attempt may have committed.
+func TestRejectedBookingAdvice(t *testing.T) {
+	tests := []struct {
+		name     string
+		attempts int
+		want     []string
+		notWant  string
+	}{
+		{"first attempt", 1, []string{"nothing was booked", "quote_delivery"}, "repeating the same call is safe"},
+		{"after a retry", 2, []string{"call create_delivery again with the same quote_id"}, "nothing was booked"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gamma := &dispatchtest.Partner{PartnerName: "gamma", CreateFn: func(context.Context, string, partner.CreateRequest) (partner.Delivery, error) {
+				return partner.Delivery{}, &partner.APIError{Partner: "gamma", StatusCode: 422, Attempts: tt.attempts, Body: "pickup outside coverage"}
+			}}
+			cs, _ := newSession(t, gamma)
+			var quoted dispatch.QuoteResult
+			structured(t, call(t, cs, "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": missionDolores}), &quoted)
+
+			res := call(t, cs, "create_delivery", map[string]any{"quote_id": quoted.Quotes[0].ID})
+			got := text(res)
+			if !res.IsError {
+				t.Fatalf("IsError = false, text %q", got)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("text %q, want it to contain %q", got, w)
+				}
+			}
+			if strings.Contains(got, tt.notWant) {
+				t.Errorf("text %q must not contain %q", got, tt.notWant)
+			}
+		})
+	}
+}
+
 func TestQuoteStructuredOutput(t *testing.T) {
 	cs, _ := newSession(t, &dispatchtest.Partner{PartnerName: "alpha"})
 	raw := structured(t, call(t, cs, "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": missionDolores}), nil)
