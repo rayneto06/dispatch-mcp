@@ -159,6 +159,50 @@ func TestRunShutsDownOnCancel(t *testing.T) {
 	}
 }
 
+// A request still stuck when the drain deadline passes is cut off, so the
+// process can exit on time instead of waiting for a slow client.
+func TestRunClosesConnectionsAfterDrainTimeout(t *testing.T) {
+	addr := freeAddr(t)
+	entered, stuck := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(stuck) })
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-stuck
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, NewServer(addr, h), 100*time.Millisecond) }()
+	waitListening(t, addr)
+
+	clientErr := make(chan error, 1)
+	go func() {
+		resp, err := http.Get("http://" + addr)
+		if err == nil {
+			resp.Body.Close()
+		}
+		clientErr <- err
+	}()
+	<-entered
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Run = nil after the drain timed out, want an error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	select {
+	case err := <-clientErr:
+		if err == nil {
+			t.Error("the stuck request got a response, want its connection closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the stuck connection is still open 2s after the drain deadline")
+	}
+}
+
 func TestRunReportsListenError(t *testing.T) {
 	err := Run(context.Background(), NewServer("256.0.0.1:1", okHandler), time.Second)
 	if err == nil {
