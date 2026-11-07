@@ -35,5 +35,6 @@ func DistanceKm(a, b Point) float64 {
 	dLon := rad(b.Lon - a.Lon)
 	h := math.Sin(dLat/2)*math.Sin(dLat/2) +
 		math.Cos(rad(a.Lat))*math.Cos(rad(b.Lat))*math.Sin(dLon/2)*math.Sin(dLon/2)
-	return 2 * earthRadiusKm * math.Asin(math.Sqrt(h))
+	// Rounding can push h just past 1 for antipodal points; asin would be NaN.
+	return 2 * earthRadiusKm * math.Asin(math.Sqrt(min(h, 1)))
 }

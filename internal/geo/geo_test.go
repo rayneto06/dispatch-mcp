@@ -51,3 +51,14 @@ func TestDistanceKm(t *testing.T) {
 		t.Errorf("distance is not symmetric: %v vs %v", a, b)
 	}
 }
+
+// Rounding can push the haversine term just above 1 for antipodal points,
+// and asin of that is NaN, which compares false against any limit.
+func TestDistanceKmAntipodalIsFinite(t *testing.T) {
+	a := Point{Lat: 30.03623385529933, Lon: -17.180773044878237}
+	b := Point{Lat: -30.03623385529933, Lon: 162.81922695512176}
+	const halfCircumference = 20015.1 // π × 6371.0088 km
+	if d := DistanceKm(a, b); math.IsNaN(d) || math.Abs(d-halfCircumference) > 1 {
+		t.Errorf("antipodal distance = %v, want about %v", d, halfCircumference)
+	}
+}
