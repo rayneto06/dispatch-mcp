@@ -72,7 +72,8 @@ func (t *tools) register(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "create_delivery",
 		Description: "Book a delivery from a quote_id returned by quote_delivery. Idempotent: calling it again with the same quote_id " +
-			"returns the same delivery with already_booked true, so it is safe to retry after a timeout or error.",
+			"returns the same delivery with already_booked true, so it is safe to retry after a timeout or error. " +
+			"Booking commits to the quoted price; there is no cancel tool.",
 		Annotations: &mcp.ToolAnnotations{Title: "Book a delivery", IdempotentHint: true, DestructiveHint: ptr(false)},
 	}, t.create)
 
