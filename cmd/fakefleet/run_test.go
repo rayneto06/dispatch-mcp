@@ -118,6 +118,27 @@ func allStatuses(seen map[string]bool) bool {
 	return seen["assigned"] && seen["picked_up"] && seen["delivered"]
 }
 
+// Queued webhooks get what is left of the shutdown window, not a fixed 2 s:
+// a slow receiver here needs about 2.4 s for the last one.
+func TestRunGivesWebhooksTheRestOfTheWindow(t *testing.T) {
+	rec := newStatusRecorder()
+	rec.delay = 1200 * time.Millisecond
+	receiver := httptest.NewServer(rec)
+	defer receiver.Close()
+
+	base, stop, done := startFleet(t, receiver.URL)
+	bookOne(t, base)
+	time.Sleep(300 * time.Millisecond) // all three statuses are queued or in flight
+	stop()
+
+	if err := <-done; err != nil {
+		t.Fatalf("run = %v", err)
+	}
+	if seen := rec.delivered(); !allStatuses(seen) {
+		t.Errorf("delivered before exit: %v, want assigned, picked_up and delivered", seen)
+	}
+}
+
 // Webhooks already on their way when the process is told to stop are still
 // delivered before it exits.
 func TestRunFlushesWebhooksOnShutdown(t *testing.T) {

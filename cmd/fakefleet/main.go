@@ -72,6 +72,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	return cfg, nil
 }
 
+// shutdownWindow is how long the process has after SIGTERM: Cloud Run allows
+// about 10 s, and the HTTP drain and the webhook flush share it.
+const shutdownWindow = 9500 * time.Millisecond
+
 func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
 	cfg, err := loadConfig(getenv)
 	if err != nil {
@@ -91,12 +95,20 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}, fleet.DefaultProfiles())
 	f.Start()
 
+	stopped := make(chan time.Time, 1)
+	context.AfterFunc(ctx, func() { stopped <- time.Now() })
+
 	logger.Info("starting", "addr", cfg.Addr, "webhook_url", cfg.WebhookURL)
 	err = httpx.Run(ctx, httpx.NewServer(cfg.Addr, f.Handler()), 8*time.Second)
 
-	// The HTTP server has stopped; give queued webhooks the rest of the
-	// shutdown window (Cloud Run allows about 10 s after SIGTERM).
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// The HTTP server has stopped; queued webhooks get the rest of the
+	// shutdown window, counted from the signal. If the server failed on its
+	// own, there was no signal: give them a short grace period instead.
+	deadline := time.Now().Add(2 * time.Second)
+	if ctx.Err() != nil {
+		deadline = (<-stopped).Add(shutdownWindow)
+	}
+	shutdownCtx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	if serr := f.Shutdown(shutdownCtx); serr != nil {
 		logger.Warn("webhooks left undelivered at shutdown", "error", serr)
