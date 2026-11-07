@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -72,7 +73,8 @@ func (o *OSRM) Route(ctx context.Context, from, to geo.Point) (Route, error) {
 			Duration float64 `json:"duration"` // seconds
 		} `json:"routes"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	// A real answer is a few hundred bytes; never read an unbounded one.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
 		return Route{}, fmt.Errorf("osrm: decode: %w", err)
 	}
 	if body.Code != "Ok" || len(body.Routes) == 0 {
