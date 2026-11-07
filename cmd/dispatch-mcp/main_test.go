@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -168,6 +169,46 @@ func TestStdioStdoutIsOnlyJSONRPC(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), `"severity"`) {
 		t.Errorf("expected a log line on stderr, got %q", stderr.String())
+	}
+}
+
+// A second local server (another editor window) can hold the webhook port.
+// The tools must still work: polling keeps deliveries current.
+func TestStdioKeepsServingWhenWebhookPortIsTaken(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+
+	stdinR, stdinW := io.Pipe()
+	var stdout, stderr syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(context.Background(), env(with(baseEnv(), "WEBHOOK_ADDR", taken.Addr().String())), stdinR, &stdout, &stderr)
+	}()
+
+	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}` + "\n"
+	io.WriteString(stdinW, initialize)
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(stdout.String(), "\n") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	stdinW.Close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run returned %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after stdin EOF")
+	}
+	if !strings.Contains(stdout.String(), `"result"`) {
+		t.Errorf("no initialize result on stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "polling") {
+		t.Errorf("stderr does not say deliveries fall back to polling: %q", stderr.String())
 	}
 }
 

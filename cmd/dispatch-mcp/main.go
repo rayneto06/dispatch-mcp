@@ -186,24 +186,23 @@ func run(ctx context.Context, getenv func(string) string, stdin io.Reader, stdou
 		return httpx.Run(ctx, httpx.NewServer(cfg.Addr, a.handler), 8*time.Second)
 	}
 
-	// stdio: MCP on stdin/stdout, webhooks on a local listener. Whichever
-	// stops first (client closed stdin, signal, listener failed) stops both.
+	// stdio: MCP on stdin/stdout, webhooks on a local listener. MCP decides
+	// when to stop (client closed stdin, signal); the listener stops with it.
+	// A listener that cannot start (a second window holds the port) costs
+	// freshness, not the tools: get_delivery polls partners that go quiet.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	httpErr := make(chan error, 1)
+	webhooksDone := make(chan struct{})
 	go func() {
-		err := httpx.Run(ctx, httpx.NewServer(cfg.Addr, a.handler), 8*time.Second)
-		if err != nil {
-			cancel()
+		defer close(webhooksDone)
+		if err := httpx.Run(ctx, httpx.NewServer(cfg.Addr, a.handler), 8*time.Second); err != nil {
+			logger.Warn("webhook listener stopped; deliveries will update by polling only", "addr", cfg.Addr, "error", err)
 		}
-		httpErr <- err
 	}()
 
 	mcpErr := a.mcp.Run(ctx, &mcp.IOTransport{Reader: io.NopCloser(stdin), Writer: nopWriteCloser{stdout}})
 	cancel()
-	if err := <-httpErr; err != nil {
-		return fmt.Errorf("webhook listener: %w", err)
-	}
+	<-webhooksDone
 	if mcpErr != nil && !errors.Is(mcpErr, context.Canceled) {
 		return fmt.Errorf("mcp server: %w", mcpErr)
 	}
