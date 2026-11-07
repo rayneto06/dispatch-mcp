@@ -3,3 +3,6 @@ bin/
 !.env.example
 *.test
 *.out
+# Client configs that would hold the MCP URL, and with it the token.
+.mcp.json
+.vscode/mcp.json

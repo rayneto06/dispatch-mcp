@@ -27,13 +27,18 @@ written by hand would be more code to get right for no gain.
 keeps no `Mcp-Session-Id`, so a Cloud Run restart or a second instance never
 strands a client on a dead session, and it matches the sessionless direction
 of the 2026-07-28 protocol revision. The cost is no server-to-client
-requests, which these tools don't need.
+requests, which these tools don't need. The server advertises only the tools
+capability, without `listChanged`: the tool list never changes, and a client
+told it might holds a stream open waiting for notifications.
 
 **A secret URL instead of OAuth.** The hosted endpoint is
 `/mcp/{token}`, compared in constant time, 404 on mismatch. Every MCP client
-accepts a URL; not all let you set an auth header. The token appears in
-request logs of the project that hosts it. Production: OAuth as the MCP
-authorization spec describes, with per-client identity and rate limits.
+accepts a URL; not all let you set an auth header. The cost is everywhere a
+URL goes: the request logs of the project that hosts it, shell history, and
+client config files, which is why the README loads it from `.env` and
+`.gitignore` covers `.mcp.json` and `.vscode/mcp.json`. Production: OAuth as
+the MCP authorization spec describes, with per-client identity and rate
+limits.
 
 **Errors are written for the model.** A tool returns errors as tool results
 (`IsError`), not protocol errors, so the model can read them and recover.
@@ -98,9 +103,10 @@ shared by the three simulated partners; production would have one per
 partner, with rotation.
 
 **Deduplicate by event ID, order by sequence.** Partners deliver at least
-once. A bounded, expiring set of event IDs drops exact repeats. Each event
-carries the partner's sequence number for the delivery, and only a newer one
-is applied, so late or reordered events can't move a delivery backwards.
+once. A bounded, expiring set of event IDs, kept per partner, drops exact
+repeats. Each event carries the partner's sequence number for the delivery,
+and only a newer one is applied, so late or reordered events can't move a
+delivery backwards; once delivered, it never moves again.
 Either check alone would miss a case: a resent event has a known ID, a
 reordered one does not.
 
