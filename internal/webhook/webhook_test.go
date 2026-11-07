@@ -112,6 +112,39 @@ func TestWebhook(t *testing.T) {
 	}
 }
 
+// Event IDs are each partner's own; two partners may use the same one.
+func TestDedupIsPerPartner(t *testing.T) {
+	f := newFixture(t)
+	f.store.AddDelivery(dispatch.Delivery{ID: "d_2", QuoteID: "q_2", Partner: "beta", PartnerDeliveryID: "beta_1",
+		Status: dispatch.StatusPending, Sequence: 1, CreatedAt: t0})
+	for _, p := range []string{"alpha", "beta"} {
+		if code := f.post("/webhooks/"+p, eventJSON("1001", p, p+"_1", "assigned", 2), t0, true); code != http.StatusOK {
+			t.Fatalf("%s: status %d", p, code)
+		}
+	}
+	for _, id := range []string{"d_1", "d_2"} {
+		if d, _ := f.store.Delivery(id); d.Status != dispatch.StatusAssigned {
+			t.Errorf("%s status = %s, want assigned", id, d.Status)
+		}
+	}
+	if n := f.reg.Partner("beta").DuplicatesDropped.Load(); n != 0 {
+		t.Errorf("beta duplicates dropped = %d, want 0", n)
+	}
+}
+
+func TestMissingOccurredAtUsesNow(t *testing.T) {
+	f := newFixture(t)
+	body := `{"id":"evt_9","type":"delivery.status_changed","partner":"alpha","partner_delivery_id":"alpha_1","status":"assigned","sequence":2}`
+	if code := f.post("/webhooks/alpha", body, t0, true); code != http.StatusOK {
+		t.Fatalf("status %d", code)
+	}
+	d, _ := f.store.Delivery("d_1")
+	last := d.History[len(d.History)-1]
+	if !d.UpdatedAt.Equal(t0) || !last.At.Equal(t0) {
+		t.Errorf("updated_at = %v, history at = %v; want both %v", d.UpdatedAt, last.At, t0)
+	}
+}
+
 func TestWebhookUnknownDelivery(t *testing.T) {
 	f := newFixture(t)
 	if code := f.post("/webhooks/alpha", eventJSON("evt_7", "alpha", "alpha_999", "assigned", 2), t0, true); code != 200 {
