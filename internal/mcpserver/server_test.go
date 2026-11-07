@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/rayneto06/dispatch-mcp/internal/dispatch/dispatchtest"
@@ -11,14 +12,11 @@ import (
 // come, and a logging capability promises log messages nothing sends.
 func TestCapabilitiesAdvertiseOnlyTools(t *testing.T) {
 	cs, _ := newSession(t, &dispatchtest.Partner{PartnerName: "alpha"})
-	caps := cs.InitializeResult().Capabilities
-	if caps.Tools == nil {
-		t.Fatal("tools capability missing")
+	got, err := json.Marshal(cs.InitializeResult().Capabilities)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if caps.Tools.ListChanged {
-		t.Error("tools.listChanged advertised, but the tool list never changes")
-	}
-	if caps.Logging != nil || caps.Prompts != nil || caps.Resources != nil {
-		t.Errorf("unexpected capabilities: logging=%v prompts=%v resources=%v", caps.Logging, caps.Prompts, caps.Resources)
+	if want := `{"tools":{}}`; string(got) != want {
+		t.Errorf("capabilities = %s, want %s", got, want)
 	}
 }
