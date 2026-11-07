@@ -74,8 +74,8 @@ effects (quotes), or a POST carrying an idempotency key. Useful: 429, 5xx,
 timeouts and connection errors; never other 4xx. At most three attempts.
 
 **Backoff with full jitter.** A random wait between zero and a cap that
-doubles per attempt (200 ms, 400 ms, up to 2 s), so callers that failed
-together don't retry together.
+doubles per attempt (200 ms, then 400 ms; capped at 2 s), so callers that
+failed together don't retry together.
 
 **`Retry-After` is honored, capped, and never outlives the deadline.** The
 wait is capped at 5 s. If it would end after the caller's deadline, the
@@ -164,9 +164,11 @@ to every partner call and to the partner as `X-Request-ID`.
 
 **Abuse limits for a public demo.** A global token bucket on `/mcp`
 (5 req/s, bursts of 20), caps on stored quotes, deliveries and event IDs,
-the OSRM limiter, body size caps, `max-instances=1`, and a billing spend cap
-on the project. Per-client limits would need per-client identity; see OAuth
-above.
+the OSRM limiter, body size caps (256 KiB for MCP requests, 64 KiB for
+webhooks), and `max-instances=1`. They bound memory and instance count, not
+cost: request fees and logging still grow with traffic, and the Cloud Billing
+spend cap the README recommends is something the project owner has to set.
+Per-client limits would need per-client identity; see OAuth above.
 
 ## Next steps
 
