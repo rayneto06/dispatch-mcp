@@ -108,6 +108,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	return cfg, nil
 }
 
+// maxMCPBodyBytes caps one MCP request. Tool arguments are coordinates and
+// IDs, so the SDK's 4 MiB default only helps someone exhaust memory.
+const maxMCPBodyBytes = 256 << 10
+
 // app is everything run needs, built once so tests can wire it the same way.
 type app struct {
 	mcp     *mcp.Server
@@ -162,10 +166,18 @@ func newApp(cfg config, logger *slog.Logger, httpClient *http.Client) *app {
 		// client with a dead session. Every request gets a fresh one.
 		mcpHandler := mcp.NewStreamableHTTPHandler(
 			func(*http.Request) *mcp.Server { return a.mcp },
-			&mcp.StreamableHTTPOptions{Stateless: true, PropagateRequestCancellation: true, Logger: logger},
+			&mcp.StreamableHTTPOptions{
+				Stateless:                    true,
+				PropagateRequestCancellation: true,
+				MaxRequestBodyBytes:          maxMCPBodyBytes,
+				Logger:                       logger,
+			},
 		)
 		limiter := rate.NewLimiter(5, 20) // 5 req/s sustained, bursts of 20
-		mux.Handle("/mcp/{token}", httpx.RequireToken(cfg.MCPToken, httpx.RateLimit(limiter, mcpHandler)))
+		// Browsers on another origin get 403, as the Streamable HTTP spec
+		// requires; clients that send no Origin (CLIs, agents) are unaffected.
+		sameOrigin := http.NewCrossOriginProtection().Handler(mcpHandler)
+		mux.Handle("/mcp/{token}", httpx.RequireToken(cfg.MCPToken, httpx.RateLimit(limiter, sameOrigin)))
 	}
 	a.handler = mux
 	return a

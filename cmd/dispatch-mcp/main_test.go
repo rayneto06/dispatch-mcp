@@ -263,24 +263,65 @@ func TestHTTPModeServesHealthAndMCP(t *testing.T) {
 		t.Errorf("health = %d %q", resp.StatusCode, body)
 	}
 
-	ping := func(path string) (int, string) {
-		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		b, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, string(b)
-	}
-
-	if code, body := ping("/mcp/" + testToken); code != http.StatusOK || !strings.Contains(body, `"result"`) {
+	if code, body := postMCP(t, srv.URL+"/mcp/"+testToken, pingRequest, nil); code != http.StatusOK || !strings.Contains(body, `"result"`) {
 		t.Errorf("ping with token = %d %q", code, body)
 	}
-	if code, _ := ping("/mcp/wrong"); code != http.StatusNotFound {
+	if code, _ := postMCP(t, srv.URL+"/mcp/wrong", pingRequest, nil); code != http.StatusNotFound {
 		t.Errorf("ping with wrong token = %d, want 404", code)
+	}
+}
+
+const pingRequest = `{"jsonrpc":"2.0","id":1,"method":"ping"}`
+
+// httpModeServer serves the app's handler in http mode.
+func httpModeServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	cfg, err := loadConfig(env(with(baseEnv(), "TRANSPORT", "http", "MCP_TOKEN", testToken)))
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	srv := httptest.NewServer(newApp(cfg, slog.New(slog.DiscardHandler), http.DefaultClient).handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// postMCP sends one JSON-RPC body the way a Streamable HTTP client does.
+func postMCP(t *testing.T, url, body string, header http.Header) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	for k, vs := range header {
+		req.Header[k] = vs
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// Tool arguments are coordinates and IDs; a body this size is abuse.
+func TestHTTPModeRejectsLargeBodies(t *testing.T) {
+	srv := httpModeServer(t)
+	big := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"` + strings.Repeat("x", 300<<10) + `"}}`
+	if code, _ := postMCP(t, srv.URL+"/mcp/"+testToken, big, nil); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("300 KiB body = %d, want 413", code)
+	}
+}
+
+// The Streamable HTTP spec requires rejecting requests from other origins,
+// so a web page cannot drive the server through a visitor's browser.
+func TestHTTPModeRejectsCrossOriginBrowsers(t *testing.T) {
+	srv := httpModeServer(t)
+	url := srv.URL + "/mcp/" + testToken
+	if code, _ := postMCP(t, url, pingRequest, http.Header{"Origin": {"https://evil.example"}}); code != http.StatusForbidden {
+		t.Errorf("cross-origin request = %d, want 403", code)
+	}
+	if code, _ := postMCP(t, url, pingRequest, nil); code != http.StatusOK {
+		t.Errorf("request without Origin = %d, want 200", code)
 	}
 }
 
