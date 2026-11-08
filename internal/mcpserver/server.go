@@ -39,8 +39,8 @@ func New(d Deps) *mcp.Server {
 	// logging (deprecated since protocol 2026-07-28) and tools.listChanged.
 	// The tool list never changes and nothing logs to clients, and a client
 	// told that tools can change holds a subscriptions/listen stream open
-	// (5 minutes at a time, as seen in production logs), which keeps a
-	// scale-to-zero instance busy.
+	// (5 minutes at a time, as seen in the hosted deployment's logs), which
+	// keeps a scale-to-zero instance busy.
 	s := mcp.NewServer(&mcp.Implementation{Name: "dispatch-mcp", Version: "0.1.0"}, &mcp.ServerOptions{
 		Instructions: Instructions,
 		Logger:       d.Logger,

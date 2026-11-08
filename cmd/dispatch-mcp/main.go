@@ -177,8 +177,9 @@ func newApp(cfg config, logger *slog.Logger, httpClient *http.Client) *app {
 			},
 		)
 		limiter := rate.NewLimiter(5, 20) // 5 req/s sustained, bursts of 20
-		// Browsers on another origin get 403, as the Streamable HTTP spec
-		// requires; clients that send no Origin (CLIs, agents) are unaffected.
+		// Cross-site browser requests get 403 (CSRF protection); clients that
+		// send no Origin, such as CLIs and agents, are unaffected. A page using
+		// DNS rebinding gets past this check, but it cannot know the token.
 		sameOrigin := http.NewCrossOriginProtection().Handler(mcpHandler)
 		mux.Handle("/mcp/{token}", httpx.RequireToken(cfg.MCPToken, httpx.RateLimit(limiter, sameOrigin)))
 	}
@@ -210,8 +211,14 @@ func run(ctx context.Context, getenv func(string) string, stdin io.Reader, stdou
 	webhooksDone := make(chan struct{})
 	go func() {
 		defer close(webhooksDone)
-		if err := httpx.Run(ctx, httpx.NewServer(cfg.Addr, a.handler), 8*time.Second); err != nil {
-			logger.Warn("webhook listener stopped; deliveries will update by polling only", "addr", cfg.Addr, "error", err)
+		err := httpx.Run(ctx, httpx.NewServer(cfg.Addr, a.handler), 8*time.Second)
+		switch {
+		case err == nil:
+		case ctx.Err() != nil: // shutting down: only the drain went wrong
+			logger.Warn("webhook listener did not drain in time", "addr", cfg.Addr, "error", err)
+		default:
+			logger.Warn("webhook listener stopped; get_delivery keeps deliveries current by polling partners",
+				"addr", cfg.Addr, "error", err)
 		}
 	}()
 

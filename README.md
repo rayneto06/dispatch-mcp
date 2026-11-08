@@ -73,8 +73,9 @@ Then ask Claude Code something like "quote a delivery from the Ferry
 Building to Mission Dolores and book the cheapest one".
 
 If port 8081 is already taken, by a second window running the server for
-example, the server still starts and its deliveries update by polling
-instead of by webhook.
+example, the server still starts. Its webhooks then reach the other server,
+so `get_delivery` keeps its deliveries current by asking the partner instead;
+`list_deliveries` shows the status as of the last `get_delivery`.
 
 With the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
 
