@@ -16,9 +16,11 @@ purpose: one is slow, one rate-limits and fails, and all of them sometimes
 deliver the same webhook twice. Routing uses the public
 [OSRM](https://project-osrm.org/) demo server.
 
-This is a learning project, built to get hands-on with Go. It runs on Cloud
-Run, but it is a proof of concept, not a production system;
-[DECISIONS.md](DECISIONS.md) says what would change for production.
+This is a learning project, built to get hands-on with Go. It deploys to
+Cloud Run, but it is a proof of concept, not a production system;
+[DECISIONS.md](DECISIONS.md) says what would change for production. No
+public instance is running: [run it locally](#run-it-locally), or
+[deploy your own](#deploy).
 
 ## Architecture
 
@@ -53,10 +55,39 @@ minutes, each step reported by webhook.
 | `list_deliveries` | Newest first, cursor-paginated. |
 | `partner_health` | Per partner: requests, retries, 429s, 5xx, timeouts, webhooks received, duplicates and out-of-order events dropped, bad signatures. Plus OSRM calls and fallbacks. |
 
-## A session against the hosted server
+## Run it locally
 
-Tool calls made by `internal/smoke` against the Cloud Run deployment
-(abridged), from the Ferry Building to Mission Dolores in San Francisco:
+Requires Go 1.27.
+
+```sh
+go build -o bin/ ./cmd/...
+
+# Terminal 1: the simulated partners on :8090. TIME_SCALE=0.2 runs five times faster.
+PARTNER_API_KEY=dev WEBHOOK_SECRET=dev TIME_SCALE=0.2 bin/fakefleet
+
+# Claude Code starts dispatch-mcp over stdio; it listens for webhooks on 127.0.0.1:8081.
+claude mcp add dispatch -e PARTNER_API_KEY=dev -e WEBHOOK_SECRET=dev -- "$PWD/bin/dispatch-mcp"
+```
+
+Then ask Claude Code something like "quote a delivery from the Ferry
+Building to Mission Dolores and book the cheapest one".
+
+If port 8081 is already taken, by a second window running the server for
+example, the server still starts. Its webhooks then reach the other server,
+so `get_delivery` keeps its deliveries current by asking the partner instead;
+`list_deliveries` shows the status as of the last `get_delivery`.
+
+With the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
+
+```sh
+npx @modelcontextprotocol/inspector -e PARTNER_API_KEY=dev -e WEBHOOK_SECRET=dev bin/dispatch-mcp
+```
+
+## Example session
+
+Tool calls captured by `internal/smoke` against a Cloud Run deployment of
+this repo (abridged), from the Ferry Building to Mission Dolores in San
+Francisco. The same flow runs locally.
 
 ```jsonc
 // quote_delivery {"pickup":{"lat":37.7955,"lon":-122.3937},"dropoff":{"lat":37.7599,"lon":-122.4268}}   2.2 s
@@ -76,39 +107,22 @@ Tool calls made by `internal/smoke` against the Cloud Run deployment
 {"delivery": {"status": "assigned", "last_update_source": "webhook", "history": [...]}}
 ```
 
-## Run it locally
+## Connect to a deployment
 
-Requires Go 1.27.
-
-```sh
-go build -o bin/ ./cmd/...
-
-# Terminal 1: the simulated partners on :8090. TIME_SCALE=0.2 runs five times faster.
-PARTNER_API_KEY=dev WEBHOOK_SECRET=dev TIME_SCALE=0.2 bin/fakefleet
-
-# Claude Code starts dispatch-mcp over stdio; it listens for webhooks on 127.0.0.1:8081.
-claude mcp add dispatch -e PARTNER_API_KEY=dev -e WEBHOOK_SECRET=dev -- "$PWD/bin/dispatch-mcp"
-```
-
-Then ask Claude Code something like "quote a delivery from the Ferry
-Building to Mission Dolores and book the cheapest one".
-
-With the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
+A deployment's endpoint is one URL with a secret path segment, which
+`deploy/deploy.sh` saves to `.env` as `MCP_URL`. It works with any MCP client
+that supports remote servers over Streamable HTTP; there is no OAuth step,
+because the URL is the credential. Keep it out of client config files you
+commit: `.gitignore` already covers `.mcp.json` and `.vscode/mcp.json`.
 
 ```sh
-npx @modelcontextprotocol/inspector -e PARTNER_API_KEY=dev -e WEBHOOK_SECRET=dev bin/dispatch-mcp
+set -a; . ./.env; set +a   # loads MCP_URL into this shell
 ```
-
-## Use the hosted demo
-
-The hosted endpoint is one URL with a secret path segment, shared
-privately. It works with any MCP client that supports remote servers over
-Streamable HTTP; there is no OAuth step, because the URL is the credential.
 
 | Client | How to connect |
 |---|---|
-| Claude Code | `claude mcp add --transport http dispatch "<MCP_URL>"` |
-| Codex (CLI and IDE) | `codex mcp add dispatch --url "<MCP_URL>"`, or in `~/.codex/config.toml`: `[mcp_servers.dispatch]` with `url = "<MCP_URL>"` |
+| Claude Code | `claude mcp add --transport http dispatch "$MCP_URL"` |
+| Codex (CLI and IDE) | `codex mcp add dispatch --url "$MCP_URL"`, or in `~/.codex/config.toml`: `[mcp_servers.dispatch]` with `url = "<MCP_URL>"` |
 | Claude Desktop, claude.ai | Settings → Connectors → Add custom connector, paste the URL |
 | Cursor | `~/.cursor/mcp.json`: `{"mcpServers": {"dispatch": {"url": "<MCP_URL>"}}}` |
 | VS Code | `.vscode/mcp.json`: `{"servers": {"dispatch": {"type": "http", "url": "<MCP_URL>"}}}` |
@@ -117,14 +131,13 @@ Streamable HTTP; there is no OAuth step, because the URL is the credential.
 Then ask in plain language, for example "quote a delivery from the Ferry
 Building to Mission Dolores in San Francisco and book the fastest one". The
 server's instructions tell the agent the flow. Any city works, as long as
-pickup and dropoff are within 50 km.
+pickup and dropoff are within 50 km. Clients that only speak the older
+HTTP+SSE transport will not connect.
 
-Tested end to end with Claude Code, MCP Inspector and the Go SDK client.
-Clients that only speak the older HTTP+SSE transport will not connect.
-
-Both services scale to zero. The first call after a quiet period wakes them
-(a few seconds), and state is in memory, so deliveries disappear after about
-15 minutes without traffic. The server's instructions tell the agent this.
+Once deployed, both services scale to zero. The first call after a quiet
+period wakes them (a few seconds), and state is in memory, so deliveries
+disappear after about 15 minutes without traffic. The server's instructions
+tell the agent this.
 
 ## Configuration
 
@@ -158,25 +171,32 @@ gcloud logging read 'jsonPayload.request_id="req_3f9a1c0b7d2e"' --project my-pro
 ```sh
 go test -race ./...
 
-# Against a deployment (MCP_URL comes from .env, see Deploy):
+# Against a running server in http mode, a deployment or a local one
+# (MCP_URL comes from .env, see Deploy):
 set -a; . ./.env; set +a
 go test -tags smoke -v ./internal/smoke
 ```
 
-CI runs `gofmt`, `go vet` and the race-enabled tests on every push. Unit
-tests use `httptest` servers for the partner, OSRM and webhook sides.
-`cmd/dispatch-mcp` has end-to-end tests that drive the real server through
-an in-memory MCP client against an in-process fleet, including one where the
-partner books and then fails, and sends every webhook twice.
+CI runs `gofmt`, `go vet`, the race-enabled tests and a Docker image build on
+every push. Unit tests use `httptest` servers for the partner, OSRM and
+webhook sides. `cmd/dispatch-mcp` has end-to-end tests that drive the real
+server through an in-memory MCP client against an in-process fleet,
+including one where the partner books and then fails, and sends every
+webhook twice.
+
+Tested end to end with Claude Code, MCP Inspector and the Go SDK client.
 
 ## Deploy
 
 `deploy/deploy.sh` builds one image with Cloud Build and deploys two Cloud
 Run services, `dispatch-mcp` and `fakefleet`, in their own project. It
-creates the project if needed, the secrets in Secret Manager and a service
-account that can only read them. It is safe to re-run. The MCP URL carries
-the token, so the script writes it to `.env` (gitignored, mode 600) as
-`MCP_URL` instead of printing it; `.env.example` lists the variables.
+creates the project if needed, the secrets in Secret Manager, and one service
+account per service that can read only the secrets that service uses. Once a
+deploy has succeeded, re-running it is safe; a first run that fails while
+linking billing or creating the secrets may need that step finished by hand.
+The MCP URL carries the token, so the script writes it to `.env` (gitignored,
+mode 600) as `MCP_URL` instead of printing it; `.env.example` lists the
+variables.
 
 ```sh
 PROJECT_ID=my-project BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX bash deploy/deploy.sh
@@ -184,6 +204,16 @@ PROJECT_ID=my-project BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX bash deploy/deploy.sh
 
 Both services run with `min-instances=0` and `max-instances=1`. Set a
 Cloud Billing spend cap on Cloud Run for the project.
+
+To rotate the token, add a secret version and deploy again; the script
+rewrites `MCP_URL` in `.env`:
+
+```sh
+openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add mcp-token --data-file=- --project my-project
+PROJECT_ID=my-project bash deploy/deploy.sh
+```
+
+To remove everything, delete the project: `gcloud projects delete my-project`.
 
 ## Layout
 
@@ -203,3 +233,7 @@ internal/obs         JSON logger and request IDs
 internal/geo         coordinates and distance
 internal/smoke       smoke test for a deployment (build tag "smoke")
 ```
+
+## License
+
+[MIT](LICENSE).

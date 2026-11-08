@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rayneto06/dispatch-mcp/internal/dispatch/dispatchtest"
@@ -316,6 +317,102 @@ func TestCreateRecordsDelivery(t *testing.T) {
 	if !strings.HasPrefix(d.ID, "d_") || d.PartnerDeliveryID != "alpha_1" || d.Status != StatusPending ||
 		d.PriceCents != q.PriceCents || d.Pickup != ferryBuilding || len(d.History) != 1 || d.History[0].Source != SourceCreate {
 		t.Errorf("delivery = %+v", d)
+	}
+}
+
+// A full store must refuse before the partner books, or the partner holds a
+// booking nobody can see.
+func TestCreateAtCapacityDoesNotBook(t *testing.T) {
+	alpha := &dispatchtest.Partner{PartnerName: "alpha"}
+	e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, alpha)
+	e.store.limits.MaxDeliveries = 1
+	first := quoteOne(t, e)
+	if _, _, err := e.svc.Create(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	second := quoteOne(t, e)
+	if _, _, err := e.svc.Create(context.Background(), second.ID); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("err = %v, want ErrCapacity", err)
+	}
+	if n := alpha.Bookings(); n != 1 {
+		t.Errorf("partner bookings = %d, want 1", n)
+	}
+
+	if _, already, err := e.svc.Create(context.Background(), first.ID); err != nil || !already {
+		t.Errorf("repeat of a booked quote at capacity: already = %v, err = %v; want the existing delivery", already, err)
+	}
+}
+
+// The partner may commit a booking after the caller has gone (a dropped
+// connection, a cancelled MCP request); it must still be recorded.
+func TestCreateFinishesAfterCallerCancels(t *testing.T) {
+	entered, proceed := make(chan struct{}), make(chan struct{})
+	alpha := &dispatchtest.Partner{PartnerName: "alpha", CreateFn: func(ctx context.Context, key string, req partner.CreateRequest) (partner.Delivery, error) {
+		close(entered)
+		<-proceed
+		if err := ctx.Err(); err != nil {
+			return partner.Delivery{}, err
+		}
+		return partner.Delivery{ID: "alpha_1", Status: "pending", Sequence: 1}, nil
+	}}
+	e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, alpha)
+	q := quoteOne(t, e)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := e.svc.Create(ctx, q.ID)
+		done <- err
+	}()
+	<-entered
+	cancel()
+	close(proceed)
+
+	if err := <-done; err != nil {
+		t.Fatalf("Create after the caller cancelled = %v, want the booking recorded", err)
+	}
+	if _, ok := e.store.DeliveryByQuote(q.ID); !ok {
+		t.Error("booking not recorded")
+	}
+}
+
+// A partner that answers after the quote round closed must still be able to
+// hand over its result, or its goroutine leaks for the life of the process.
+// synctest fails the test if any goroutine in the bubble is left blocked.
+func TestQuoteAllLatePartnerGoroutineExits(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		late := &dispatchtest.Partner{PartnerName: "beta", QuoteFn: func(context.Context, partner.QuoteRequest) (partner.Quote, error) {
+			time.Sleep(5 * time.Second) // ignores its context, like a stuck partner
+			return partner.Quote{PriceCents: 900, Currency: "USD"}, nil
+		}}
+		e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, priced("alpha", 1000), late)
+		res, err := e.svc.QuoteAll(context.Background(), ferryBuilding, missionDolores)
+		if err != nil || len(res.Quotes) != 1 {
+			t.Fatalf("QuoteAll = %d quotes, %v; want alpha only", len(res.Quotes), err)
+		}
+		time.Sleep(10 * time.Second) // beta answers after nobody is listening
+		synctest.Wait()
+	})
+}
+
+// Quotes have no side effects, so they keep stopping when the caller goes.
+func TestQuoteAllStopsWhenCallerCancels(t *testing.T) {
+	alpha := &dispatchtest.Partner{PartnerName: "alpha", QuoteFn: func(ctx context.Context, req partner.QuoteRequest) (partner.Quote, error) {
+		<-ctx.Done()
+		return partner.Quote{}, ctx.Err()
+	}}
+	e := newEnv(t, DefaultConfig(), dispatchtest.Router{}, alpha)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := e.svc.QuoteAll(ctx, ferryBuilding, missionDolores)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("QuoteAll took %v after the caller cancelled at 50ms; the 1.5s quote deadline must not be what stops it", elapsed)
+	}
+	if !errors.Is(err, ErrNoQuotes) {
+		t.Errorf("err = %v, want ErrNoQuotes", err)
 	}
 }
 

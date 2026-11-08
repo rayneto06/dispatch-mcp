@@ -27,13 +27,18 @@ written by hand would be more code to get right for no gain.
 keeps no `Mcp-Session-Id`, so a Cloud Run restart or a second instance never
 strands a client on a dead session, and it matches the sessionless direction
 of the 2026-07-28 protocol revision. The cost is no server-to-client
-requests, which these tools don't need.
+requests, which these tools don't need. The server advertises only the tools
+capability, without `listChanged`: the tool list never changes, and a client
+told it might holds a stream open waiting for notifications.
 
 **A secret URL instead of OAuth.** The hosted endpoint is
 `/mcp/{token}`, compared in constant time, 404 on mismatch. Every MCP client
-accepts a URL; not all let you set an auth header. The token appears in
-request logs of the project that hosts it. Production: OAuth as the MCP
-authorization spec describes, with per-client identity and rate limits.
+accepts a URL; not all let you set an auth header. The cost is everywhere a
+URL goes: the request logs of the project that hosts it, shell history, and
+client config files, which is why the README loads it from `.env` and
+`.gitignore` covers `.mcp.json` and `.vscode/mcp.json`. Production: OAuth as
+the MCP authorization spec describes, with per-client identity and rate
+limits.
 
 **Errors are written for the model.** A tool returns errors as tool results
 (`IsError`), not protocol errors, so the model can read them and recover.
@@ -55,13 +60,22 @@ store refuses a second delivery for the same quote, so concurrent calls
 converge on one booking. Asking the agent for a key would add a way to get
 it wrong.
 
+**A booking outlives the caller.** Quotes and reads stop when the MCP client
+cancels or hangs up, but a booking does not: the partner may already have
+committed, and abandoning the call would leave a delivery only the partner
+knows about. It runs to completion within its own 8 s budget and is
+recorded. On request-billed Cloud Run, which is how `deploy/deploy.sh` runs
+`dispatch-mcp`, CPU outside a request is throttled, so there this is best
+effort; repeating `create_delivery` with the same quote ID still recovers
+the booking.
+
 **Retry only when it is safe and useful.** Safe: a GET, a POST with no side
 effects (quotes), or a POST carrying an idempotency key. Useful: 429, 5xx,
 timeouts and connection errors; never other 4xx. At most three attempts.
 
 **Backoff with full jitter.** A random wait between zero and a cap that
-doubles per attempt (200 ms, 400 ms, up to 2 s), so callers that failed
-together don't retry together.
+doubles per attempt (200 ms, then 400 ms; capped at 2 s), so callers that
+failed together don't retry together.
 
 **`Retry-After` is honored, capped, and never outlives the deadline.** The
 wait is capped at 5 s. If it would end after the caller's deadline, the
@@ -89,9 +103,10 @@ shared by the three simulated partners; production would have one per
 partner, with rotation.
 
 **Deduplicate by event ID, order by sequence.** Partners deliver at least
-once. A bounded, expiring set of event IDs drops exact repeats. Each event
-carries the partner's sequence number for the delivery, and only a newer one
-is applied, so late or reordered events can't move a delivery backwards.
+once. A bounded, expiring set of event IDs, kept per partner, drops exact
+repeats. Each event carries the partner's sequence number for the delivery,
+and only a newer one is applied, so late or reordered events can't move a
+delivery backwards; once delivered, it never moves again.
 Either check alone would miss a case: a resent event has a known ID, a
 reordered one does not.
 
@@ -149,9 +164,11 @@ to every partner call and to the partner as `X-Request-ID`.
 
 **Abuse limits for a public demo.** A global token bucket on `/mcp`
 (5 req/s, bursts of 20), caps on stored quotes, deliveries and event IDs,
-the OSRM limiter, body size caps, `max-instances=1`, and a billing spend cap
-on the project. Per-client limits would need per-client identity; see OAuth
-above.
+the OSRM limiter, body size caps (256 KiB for MCP requests, 64 KiB for
+webhooks), and `max-instances=1`. They bound memory and instance count, not
+cost: request fees and logging still grow with traffic, and the Cloud Billing
+spend cap the README recommends is something the project owner has to set.
+Per-client limits would need per-client identity; see OAuth above.
 
 ## Next steps
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -171,6 +172,46 @@ func TestStdioStdoutIsOnlyJSONRPC(t *testing.T) {
 	}
 }
 
+// A second local server (another editor window) can hold the webhook port.
+// The tools must still work: polling keeps deliveries current.
+func TestStdioKeepsServingWhenWebhookPortIsTaken(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+
+	stdinR, stdinW := io.Pipe()
+	var stdout, stderr syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(context.Background(), env(with(baseEnv(), "WEBHOOK_ADDR", taken.Addr().String())), stdinR, &stdout, &stderr)
+	}()
+
+	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}` + "\n"
+	io.WriteString(stdinW, initialize)
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(stdout.String(), "\n") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	stdinW.Close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run returned %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after stdin EOF")
+	}
+	if !strings.Contains(stdout.String(), `"result"`) {
+		t.Errorf("no initialize result on stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "polling") {
+		t.Errorf("stderr does not say deliveries fall back to polling: %q", stderr.String())
+	}
+}
+
 // An MCP client calling logging/setLevel (MCP Inspector does) must not
 // crash the server. This drives run() so the real logger is in the path.
 func TestStdioSurvivesSetLoggingLevel(t *testing.T) {
@@ -222,24 +263,125 @@ func TestHTTPModeServesHealthAndMCP(t *testing.T) {
 		t.Errorf("health = %d %q", resp.StatusCode, body)
 	}
 
-	ping := func(path string) (int, string) {
-		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		resp, err := http.DefaultClient.Do(req)
+	if code, body := postMCP(t, srv.URL+"/mcp/"+testToken, pingRequest, nil); code != http.StatusOK || !strings.Contains(body, `"result"`) {
+		t.Errorf("ping with token = %d %q", code, body)
+	}
+	if code, _ := postMCP(t, srv.URL+"/mcp/wrong", pingRequest, nil); code != http.StatusNotFound {
+		t.Errorf("ping with wrong token = %d, want 404", code)
+	}
+}
+
+const pingRequest = `{"jsonrpc":"2.0","id":1,"method":"ping"}`
+
+// httpModeServer serves the app's handler in http mode.
+func httpModeServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	cfg, err := loadConfig(env(with(baseEnv(), "TRANSPORT", "http", "MCP_TOKEN", testToken)))
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	srv := httptest.NewServer(newApp(cfg, slog.New(slog.DiscardHandler), http.DefaultClient).handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// postMCP sends one JSON-RPC body the way a Streamable HTTP client does.
+func postMCP(t *testing.T, url, body string, header http.Header) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	for k, vs := range header {
+		req.Header[k] = vs
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// The ID that names an MCP request in the logs must reach the partner, so
+// one tool call can be followed across both services.
+func TestRequestIDReachesPartner(t *testing.T) {
+	var mu sync.Mutex
+	var ids []string
+	fleetStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/quotes") {
+			mu.Lock()
+			ids = append(ids, r.Header.Get("X-Request-ID"))
+			mu.Unlock()
+		}
+		io.WriteString(w, `{"price_cents":1500,"currency":"USD","pickup_eta_s":600,"valid_for_s":600}`)
+	}))
+	defer fleetStub.Close()
+	cfg, err := loadConfig(env(with(baseEnv(), "FLEET_BASE_URL", fleetStub.URL, "OSRM_BASE_URL", "http://127.0.0.1:9", "PARTNERS", "alpha")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(cfg, slog.New(slog.DiscardHandler), &http.Client{Timeout: 5 * time.Second})
+	ct, st := mcp.NewInMemoryTransports()
+	if _, err := a.mcp.Connect(context.Background(), st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(context.Background(), ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "quote_delivery",
+		Arguments: map[string]any{"pickup": ferryBuilding, "dropoff": missionDolores}})
+	if err != nil || res.IsError {
+		t.Fatalf("quote_delivery: err %v, result %+v", err, res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ids) != 1 || !strings.HasPrefix(ids[0], "req_") {
+		t.Errorf("X-Request-ID on the partner call = %q, want one req_ ID", ids)
+	}
+}
+
+// The token bucket protects the partners and OSRM from one noisy client.
+func TestHTTPModeRateLimitsMCP(t *testing.T) {
+	srv := httpModeServer(t)
+	limited := 0
+	for range 40 {
+		resp, err := http.Get(srv.URL + "/mcp/" + testToken)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
-		b, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, string(b)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			limited++
+		}
 	}
+	if limited == 0 {
+		t.Error("40 back-to-back requests were never rate limited")
+	}
+}
 
-	if code, body := ping("/mcp/" + testToken); code != http.StatusOK || !strings.Contains(body, `"result"`) {
-		t.Errorf("ping with token = %d %q", code, body)
+// Tool arguments are coordinates and IDs; a body this size is abuse.
+func TestHTTPModeRejectsLargeBodies(t *testing.T) {
+	srv := httpModeServer(t)
+	big := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"` + strings.Repeat("x", 300<<10) + `"}}`
+	if code, _ := postMCP(t, srv.URL+"/mcp/"+testToken, big, nil); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("300 KiB body = %d, want 413", code)
 	}
-	if code, _ := ping("/mcp/wrong"); code != http.StatusNotFound {
-		t.Errorf("ping with wrong token = %d, want 404", code)
+}
+
+// The Streamable HTTP spec requires rejecting requests from other origins,
+// so a web page cannot drive the server through a visitor's browser.
+func TestHTTPModeRejectsCrossOriginBrowsers(t *testing.T) {
+	srv := httpModeServer(t)
+	url := srv.URL + "/mcp/" + testToken
+	if code, _ := postMCP(t, url, pingRequest, http.Header{"Origin": {"https://evil.example"}}); code != http.StatusForbidden {
+		t.Errorf("cross-origin request = %d, want 403", code)
+	}
+	if code, _ := postMCP(t, url, pingRequest, nil); code != http.StatusOK {
+		t.Errorf("request without Origin = %d, want 200", code)
 	}
 }
 

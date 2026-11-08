@@ -67,6 +67,7 @@ func Run(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) e
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
+		srv.Close() // the deadline passed: cut the connections still open
 		return err
 	}
 	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {

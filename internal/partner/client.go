@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -98,14 +99,40 @@ func New(cfg Config) *Client {
 
 func (c *Client) Name() string { return c.cfg.Name }
 
+// quoteWire is a partner's quote as it arrives on the wire.
+type quoteWire struct {
+	PriceCents int    `json:"price_cents"`
+	Currency   string `json:"currency"`
+	PickupETAS int    `json:"pickup_eta_s"`
+	ValidForS  int    `json:"valid_for_s"`
+}
+
+func (q quoteWire) validate() error {
+	switch {
+	case q.PriceCents <= 0:
+		return errors.New("price_cents must be positive")
+	case q.Currency == "":
+		return errors.New("currency is missing")
+	case q.PickupETAS < 0:
+		return errors.New("pickup_eta_s is negative")
+	}
+	return nil
+}
+
+func (d Delivery) validate() error {
+	if d.ID == "" {
+		return errors.New("id is missing")
+	}
+	return nil
+}
+
+// validator is implemented by response types that can tell a usable body
+// from one a misbehaving partner sent with a success status.
+type validator interface{ validate() error }
+
 func (c *Client) Quote(ctx context.Context, req QuoteRequest) (Quote, error) {
 	c.cfg.Counters.QuoteRequests.Add(1)
-	var wire struct {
-		PriceCents int    `json:"price_cents"`
-		Currency   string `json:"currency"`
-		PickupETAS int    `json:"pickup_eta_s"`
-		ValidForS  int    `json:"valid_for_s"`
-	}
+	var wire quoteWire
 	// A quote has no side effects at the partner, so retrying is safe.
 	err := c.do(ctx, request{method: http.MethodPost, path: "/quotes", body: req, retrySafe: true}, &wire)
 	if err != nil {
@@ -189,8 +216,14 @@ func (c *Client) do(ctx context.Context, r request, out any) error {
 			if out == nil {
 				return nil
 			}
-			if err := json.Unmarshal(body, out); err != nil {
-				return fmt.Errorf("partner %s: decode response: %w", c.cfg.Name, err)
+			// A success status with an unusable body is still a failure, but
+			// not a rejection: on a create, the partner may have booked.
+			err := json.Unmarshal(body, out)
+			if v, ok := out.(validator); ok && err == nil {
+				err = v.validate()
+			}
+			if err != nil {
+				return c.fail(&APIError{Partner: c.cfg.Name, StatusCode: status, Attempts: attempt, Err: err})
 			}
 			return nil
 		}

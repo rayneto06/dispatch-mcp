@@ -26,6 +26,22 @@ func newOSRM(t *testing.T, h http.HandlerFunc) *OSRM {
 	return NewOSRM(srv.URL, srv.Client(), rate.NewLimiter(rate.Inf, 1))
 }
 
+// OSRM is a public server we do not control; a huge answer must not be
+// read into memory. A real route response is a few hundred bytes.
+func TestRouteRejectsOversizedResponse(t *testing.T) {
+	o := newOSRM(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"code":"Ok","routes":[`)
+		route := `{"distance":4321.5,"duration":610.2},`
+		for written := 0; written < 2<<20; written += len(route) {
+			io.WriteString(w, route)
+		}
+		io.WriteString(w, `{"distance":4321.5,"duration":610.2}]}`)
+	})
+	if _, err := o.Route(context.Background(), ferryBuilding, missionDolores); err == nil {
+		t.Error("a 2 MiB OSRM response was accepted, want an error")
+	}
+}
+
 func TestOSRMRoutePathIsLonLat(t *testing.T) {
 	o := newOSRM(t, func(w http.ResponseWriter, r *http.Request) {
 		if want := "/route/v1/driving/-122.3937,37.7955;-122.4268,37.7599"; r.URL.Path != want {

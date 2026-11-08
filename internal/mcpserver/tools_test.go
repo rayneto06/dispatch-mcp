@@ -131,7 +131,7 @@ func TestToolErrorsAreAgentReadable(t *testing.T) {
 		want       string
 	}{
 		{"unknown quote", "create_delivery", map[string]any{"quote_id": "q_nope"}, "quote_id not found; call quote_delivery to get a fresh quote"},
-		{"unknown delivery", "get_delivery", map[string]any{"delivery_id": "d_nope"}, "resets after about 15 minutes without traffic"},
+		{"unknown delivery", "get_delivery", map[string]any{"delivery_id": "d_nope"}, "lost when the server restarts"},
 		{"bad latitude", "quote_delivery", map[string]any{"pickup": geo.Point{Lat: 200}, "dropoff": missionDolores}, "lat must be between"},
 		{"same point", "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": ferryBuilding}, "pickup and dropoff are the same point"},
 		{"too far", "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": geo.Point{Lat: 37.3382, Lon: -121.8863}}, "more than 50 km apart"},
@@ -144,6 +144,44 @@ func TestToolErrorsAreAgentReadable(t *testing.T) {
 			res := call(t, cs, tt.tool, tt.args)
 			if !res.IsError || !strings.Contains(text(res), tt.want) {
 				t.Errorf("IsError=%v text=%q, want error containing %q", res.IsError, text(res), tt.want)
+			}
+		})
+	}
+}
+
+// A rejection is only proof that nothing was booked when it answered the
+// first attempt: after a retry, an earlier attempt may have committed.
+func TestRejectedBookingAdvice(t *testing.T) {
+	tests := []struct {
+		name     string
+		attempts int
+		want     []string
+		notWant  string
+	}{
+		{"first attempt", 1, []string{"nothing was booked", "quote_delivery"}, "repeating the same call is safe"},
+		{"after a retry", 2, []string{"call create_delivery again with the same quote_id"}, "nothing was booked"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gamma := &dispatchtest.Partner{PartnerName: "gamma", CreateFn: func(context.Context, string, partner.CreateRequest) (partner.Delivery, error) {
+				return partner.Delivery{}, &partner.APIError{Partner: "gamma", StatusCode: 422, Attempts: tt.attempts, Body: "pickup outside coverage"}
+			}}
+			cs, _ := newSession(t, gamma)
+			var quoted dispatch.QuoteResult
+			structured(t, call(t, cs, "quote_delivery", map[string]any{"pickup": ferryBuilding, "dropoff": missionDolores}), &quoted)
+
+			res := call(t, cs, "create_delivery", map[string]any{"quote_id": quoted.Quotes[0].ID})
+			got := text(res)
+			if !res.IsError {
+				t.Fatalf("IsError = false, text %q", got)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("text %q, want it to contain %q", got, w)
+				}
+			}
+			if strings.Contains(got, tt.notWant) {
+				t.Errorf("text %q must not contain %q", got, tt.notWant)
 			}
 		})
 	}

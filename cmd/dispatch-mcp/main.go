@@ -33,6 +33,9 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// The first signal starts a graceful shutdown; restoring the default
+	// handling then lets a second one stop the process at once.
+	context.AfterFunc(ctx, stop)
 	err := run(ctx, os.Getenv, os.Stdin, os.Stdout, os.Stderr)
 	stop()
 	if err != nil {
@@ -108,6 +111,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	return cfg, nil
 }
 
+// maxMCPBodyBytes caps one MCP request. Tool arguments are coordinates and
+// IDs, so the SDK's 4 MiB default only helps someone exhaust memory.
+const maxMCPBodyBytes = 256 << 10
+
 // app is everything run needs, built once so tests can wire it the same way.
 type app struct {
 	mcp     *mcp.Server
@@ -162,10 +169,19 @@ func newApp(cfg config, logger *slog.Logger, httpClient *http.Client) *app {
 		// client with a dead session. Every request gets a fresh one.
 		mcpHandler := mcp.NewStreamableHTTPHandler(
 			func(*http.Request) *mcp.Server { return a.mcp },
-			&mcp.StreamableHTTPOptions{Stateless: true, PropagateRequestCancellation: true, Logger: logger},
+			&mcp.StreamableHTTPOptions{
+				Stateless:                    true,
+				PropagateRequestCancellation: true,
+				MaxRequestBodyBytes:          maxMCPBodyBytes,
+				Logger:                       logger,
+			},
 		)
 		limiter := rate.NewLimiter(5, 20) // 5 req/s sustained, bursts of 20
-		mux.Handle("/mcp/{token}", httpx.RequireToken(cfg.MCPToken, httpx.RateLimit(limiter, mcpHandler)))
+		// Cross-site browser requests get 403 (CSRF protection); clients that
+		// send no Origin, such as CLIs and agents, are unaffected. A page using
+		// DNS rebinding gets past this check, but it cannot know the token.
+		sameOrigin := http.NewCrossOriginProtection().Handler(mcpHandler)
+		mux.Handle("/mcp/{token}", httpx.RequireToken(cfg.MCPToken, httpx.RateLimit(limiter, sameOrigin)))
 	}
 	a.handler = mux
 	return a
@@ -186,24 +202,29 @@ func run(ctx context.Context, getenv func(string) string, stdin io.Reader, stdou
 		return httpx.Run(ctx, httpx.NewServer(cfg.Addr, a.handler), 8*time.Second)
 	}
 
-	// stdio: MCP on stdin/stdout, webhooks on a local listener. Whichever
-	// stops first (client closed stdin, signal, listener failed) stops both.
+	// stdio: MCP on stdin/stdout, webhooks on a local listener. MCP decides
+	// when to stop (client closed stdin, signal); the listener stops with it.
+	// A listener that cannot start (a second window holds the port) costs
+	// freshness, not the tools: get_delivery polls partners that go quiet.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	httpErr := make(chan error, 1)
+	webhooksDone := make(chan struct{})
 	go func() {
+		defer close(webhooksDone)
 		err := httpx.Run(ctx, httpx.NewServer(cfg.Addr, a.handler), 8*time.Second)
-		if err != nil {
-			cancel()
+		switch {
+		case err == nil:
+		case ctx.Err() != nil: // shutting down: only the drain went wrong
+			logger.Warn("webhook listener did not drain in time", "addr", cfg.Addr, "error", err)
+		default:
+			logger.Warn("webhook listener stopped; get_delivery keeps deliveries current by polling partners",
+				"addr", cfg.Addr, "error", err)
 		}
-		httpErr <- err
 	}()
 
 	mcpErr := a.mcp.Run(ctx, &mcp.IOTransport{Reader: io.NopCloser(stdin), Writer: nopWriteCloser{stdout}})
 	cancel()
-	if err := <-httpErr; err != nil {
-		return fmt.Errorf("webhook listener: %w", err)
-	}
+	<-webhooksDone
 	if mcpErr != nil && !errors.Is(mcpErr, context.Canceled) {
 		return fmt.Errorf("mcp server: %w", mcpErr)
 	}

@@ -2,11 +2,13 @@ package fleet
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -220,7 +222,10 @@ func TestProgressionSendsSignedEvents(t *testing.T) {
 		status string
 		seq    int64
 	}{{"assigned", 2}, {"picked_up", 3}, {"delivered", 4}}
+	// Two workers send in parallel, so arrival order is not promised; the
+	// sequence number is what orders events.
 	events := h.recv.snapshot()
+	slices.SortFunc(events, func(a, b event) int { return cmp.Compare(a.Sequence, b.Sequence) })
 	for i, w := range want {
 		ev := events[i]
 		if ev.Status != w.status || ev.Sequence != w.seq || ev.PartnerDeliveryID != created.ID ||

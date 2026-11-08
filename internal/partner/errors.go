@@ -43,6 +43,8 @@ func (e *APIError) Error() string {
 		return p + "not found (404)"
 	case e.StatusCode >= 400:
 		return fmt.Sprintf("%srejected (%d): %s", p, e.StatusCode, e.Body)
+	case e.StatusCode != 0 && e.Err != nil:
+		return fmt.Sprintf("%sunexpected response (%d): %v", p, e.StatusCode, e.Err)
 	case e.StatusCode != 0:
 		return fmt.Sprintf("%sunexpected response (%d)", p, e.StatusCode)
 	case errors.Is(e.Err, context.Canceled):
@@ -50,7 +52,9 @@ func (e *APIError) Error() string {
 	case isTimeout(e.Err):
 		return fmt.Sprintf("%stimed out after %s", p, attempts(e.Attempts))
 	default:
-		return fmt.Sprintf("%sunreachable after %s: %v", p, attempts(e.Attempts), e.Err)
+		// e.Err names the partner's URL; it is logged with each attempt and
+		// left out here, because agents read this message.
+		return fmt.Sprintf("%sunreachable after %s", p, attempts(e.Attempts))
 	}
 }
 

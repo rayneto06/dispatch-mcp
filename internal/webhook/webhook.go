@@ -82,10 +82,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.WebhooksReceived.Add(1)
+	at := ev.OccurredAt
+	if at.IsZero() {
+		at = h.Now()
+	}
 
 	outcome := "applied"
 	switch {
-	case h.Store.MarkEvent(ev.ID, h.Now()):
+	// Event IDs are unique per partner, not across partners.
+	case h.Store.MarkEvent(name+"/"+ev.ID, h.Now()):
 		c.DuplicatesDropped.Add(1)
 		outcome = "duplicate"
 	default:
@@ -94,7 +99,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			PartnerDeliveryID: ev.PartnerDeliveryID,
 			Status:            status,
 			Sequence:          ev.Sequence,
-			At:                ev.OccurredAt,
+			At:                at,
 			Source:            dispatch.SourceWebhook,
 		}, h.Now()) {
 		case dispatch.Stale:

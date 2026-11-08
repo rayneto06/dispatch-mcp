@@ -168,6 +168,22 @@ func TestApplyStatusOrdering(t *testing.T) {
 	}
 }
 
+// Delivered is final: a later update, whatever its sequence, is stale.
+func TestTerminalDeliveryIgnoresLaterUpdates(t *testing.T) {
+	s := NewStore(DefaultLimits())
+	s.AddDelivery(Delivery{ID: "d_1", QuoteID: "q_1", Partner: "alpha", PartnerDeliveryID: "alpha_1",
+		Status: StatusDelivered, Sequence: 4, CreatedAt: t0})
+	later := t0.Add(time.Minute)
+	got := s.ApplyStatus(StatusUpdate{Partner: "alpha", PartnerDeliveryID: "alpha_1", Status: StatusPending,
+		Sequence: 5, At: later, Source: SourceWebhook}, later)
+	if got != Stale {
+		t.Errorf("ApplyStatus = %v, want Stale", got)
+	}
+	if d, _ := s.Delivery("d_1"); d.Status != StatusDelivered {
+		t.Errorf("status = %s, want delivered", d.Status)
+	}
+}
+
 func TestMarkEvent(t *testing.T) {
 	s := NewStore(Limits{MaxDeliveries: 10, MaxQuotes: 10, MaxSeenEvents: 2, SeenEventTTL: time.Hour})
 	if s.MarkEvent("evt_1", t0) {

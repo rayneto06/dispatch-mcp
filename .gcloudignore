@@ -1,4 +1,10 @@
-# Files Cloud Build does not need.
-.git/
-bin/
-.env*
+# Cloud Build gets only what the Dockerfile builds. An allowlist, so nothing
+# else in the working tree is ever uploaded.
+*
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!Dockerfile
+!go.mod
+!go.sum
